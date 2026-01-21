@@ -98,16 +98,24 @@
   <ItemGroup>
     <Compile Include="MainTool.cs" />
     <Compile Include="Models\MaterialItem.cs" />
+    <Compile Include="Models\PatternItem.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Services\CadRenderingService.cs" />
     <Compile Include="UI\MainControlWindow.xaml.cs">
       <DependentUpon>MainControlWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\PatternSelectorWindow.xaml.cs">
+      <DependentUpon>PatternSelectorWindow.xaml</DependentUpon>
     </Compile>
     <Compile Include="UI\UIHelpers.cs" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>
     <Page Include="UI\MainControlWindow.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="UI\PatternSelectorWindow.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

@@ -148,12 +148,16 @@
             </Grid>
 
             <StackPanel Grid.Row="1" Orientation="Horizontal" Background="#252526" Margin="0,1">
-                <ComboBox Width="150" Height="28" Margin="10,0" VerticalContentAlignment="Center" SelectedIndex="0">
+                <ComboBox Style="{StaticResource DarkComboBox}" Width="150" Height="28" Margin="10,0" VerticalContentAlignment="Center" SelectedIndex="0">
                     <ComboBoxItem Content="[默认方案] 森林系"/>
                     <ComboBoxItem Content="现代简约方案"/>
                 </ComboBox>
 
-                <Button Style="{StaticResource ModernBtn}" Content="拾取图纸范围" Margin="5,0"/>
+                <Button Style="{StaticResource ModernBtn}" 
+                        Content="拾取图纸范围" 
+                        Margin="5,0" 
+                        Click="PickLayers_Click"/>
+
                 <Button Style="{StaticResource ModernBtn}" Content="智能匹配" Margin="5,0"/>
                 <Separator Margin="10,10" Background="{StaticResource BorderBrush}"/>
                 <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}"/>

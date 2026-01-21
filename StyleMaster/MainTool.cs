@@ -119,7 +119,7 @@ namespace StyleMaster
         }
 
         /// <summary>
-        /// 初始化资源目录：在插件目录下确保存在 .\Resources\Materials\
+        /// 初始化插件资源目录：确保 Patterns、.hatch_thumbs 和 Materials 文件夹完整存在
         /// </summary>
         private void InitializeResources()
         {
@@ -129,19 +129,26 @@ namespace StyleMaster
                 string assemblyPath = Assembly.GetExecutingAssembly().Location;
                 string rootDir = Path.GetDirectoryName(assemblyPath);
 
-                // 组合目标路径
+                // 定义所有需要创建的路径
+                string patternsPath = Path.Combine(rootDir, "Resources", "Patterns");
+                string thumbsPath = Path.Combine(patternsPath, ".hatch_thumbs");
                 string materialPath = Path.Combine(rootDir, "Resources", "Materials");
 
-                // 如果不存在则创建
-                if (!Directory.Exists(materialPath))
+                // 逐级检查并创建
+                string[] paths = { patternsPath, thumbsPath, materialPath };
+
+                foreach (var path in paths)
                 {
-                    Directory.CreateDirectory(materialPath);
+                    if (!Directory.Exists(path))
+                    {
+                        Directory.CreateDirectory(path);
+                    }
                 }
             }
             catch (System.Exception ex)
             {
                 // 仅在命令行提示错误，不中断运行
-                Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage($"\n[警告] 资源目录创建失败: {ex.Message}");
+                Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage($"\n[警告] 资源目录自动创建失败: {ex.Message}");
             }
         }
 

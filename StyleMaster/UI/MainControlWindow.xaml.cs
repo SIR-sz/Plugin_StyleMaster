@@ -1,7 +1,12 @@
-﻿using StyleMaster.Models;
+﻿using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Runtime;
+using StyleMaster.Models;
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -142,17 +147,20 @@ namespace StyleMaster.UI
                 }
             }
         }
-        /// 遍历集合，根据当前 UI 顺序重新分配层级数字 (Priority)
+        /// <summary>
+        /// [辅助逻辑] 重新计算并刷新集合中所有材质项的层级编号 (1, 2, 3...)
         /// </summary>
         private void RefreshPriorities()
         {
+            if (MaterialItems == null) return;
+
             for (int i = 0; i < MaterialItems.Count; i++)
             {
                 MaterialItems[i].Priority = i + 1;
             }
         }
         /// <summary>
-        /// 拾取图纸范围按钮点击事件：自动提取图层
+        /// 拾取图纸范围按钮点击事件：自动提取选中多段线的图层
         /// </summary>
         private void PickLayers_Click(object sender, RoutedEventArgs e)
         {
@@ -160,44 +168,74 @@ namespace StyleMaster.UI
             if (doc == null) return;
             var ed = doc.Editor;
 
-            // 1. 暂时隐藏窗口
+            // 1. 暂时隐藏窗口，避免挡住 CAD 操作界面
             this.Hide();
 
             try
             {
-                // 2. 提示用户选择物体
-                var psr = ed.GetSelection();
-                if (psr.Status == Autodesk.AutoCAD.EditorInput.PromptStatus.OK)
+                // 2. 设置选择过滤器：只选择多段线
+                TypedValue[] tvs = new TypedValue[]
+                {
+                    new TypedValue((int)DxfCode.Operator, "<OR"),
+                    new TypedValue((int)DxfCode.Start, "LWPOLYLINE"),
+                    new TypedValue((int)DxfCode.Start, "POLYLINE"),
+                    new TypedValue((int)DxfCode.Operator, "OR>")
+                };
+                SelectionFilter filter = new SelectionFilter(tvs);
+
+                // 3. 提示用户进行框选
+                PromptSelectionResult psr = ed.GetSelection(filter);
+
+                if (psr.Status == PromptStatus.OK)
                 {
                     using (var tr = doc.TransactionManager.StartTransaction())
                     {
-                        var newLayers = new System.Collections.Generic.HashSet<string>();
-                        foreach (var id in psr.Value.GetObjectIds())
+                        var pickedLayers = new System.Collections.Generic.HashSet<string>();
+
+                        foreach (ObjectId id in psr.Value.GetObjectIds())
                         {
-                            var ent = tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Entity;
+                            var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
                             if (ent != null)
                             {
-                                newLayers.Add(ent.Layer);
+                                // 提取图层名
+                                pickedLayers.Add(ent.Layer);
                             }
                         }
 
-                        // 3. 将新图层合并到列表（去重）
-                        foreach (var layer in newLayers)
+                        // 4. 将新图层合并到 DataGrid 的数据源中
+                        int addCount = 0;
+                        foreach (var layerName in pickedLayers)
                         {
-                            if (!MaterialItems.Any(m => m.LayerName == layer))
+                            // 检查是否已存在，避免重复添加
+                            if (!MaterialItems.Any(x => x.LayerName == layerName))
                             {
-                                MaterialItems.Add(new MaterialItem { LayerName = layer });
+                                MaterialItems.Add(new MaterialItem
+                                {
+                                    LayerName = layerName,
+                                    FillMode = FillType.Hatch,
+                                    PatternName = "SOLID"
+                                });
+                                addCount++;
                             }
                         }
+
+                        // 5. 刷新界面层级数字
                         RefreshPriorities();
-                        ed.WriteMessage($"\n[StyleMaster] 已成功识别并添加 {newLayers.Count} 个图层。");
+
+                        ed.WriteMessage($"\n[StyleMaster] 拾取完成：识别到 {pickedLayers.Count} 个图层，其中新增 {addCount} 个。");
+                        tr.Commit();
                     }
                 }
             }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n[错误] 拾取失败: {ex.Message}");
+            }
             finally
             {
-                // 4. 恢复窗口显示
+                // 6. 无论操作是否成功或取消，都必须重新显示窗口
                 this.Show();
+                this.Activate(); // 确保窗口回到最前
             }
         }
 
@@ -239,31 +277,85 @@ namespace StyleMaster.UI
         }
 
         /// <summary>
-        /// 材质选择按钮点击逻辑（分模式处理）
+        /// 材质选择按钮点击逻辑：针对 Hatch 模式弹出预览选择窗口
         /// </summary>
         private void SelectMaterial_Click(object sender, RoutedEventArgs e)
         {
-            var btn = sender as Button;
+            var btn = sender as System.Windows.Controls.Button;
             var item = btn?.DataContext as MaterialItem;
             if (item == null) return;
 
             if (item.FillMode == FillType.Hatch)
             {
-                // TODO: 弹出你要求的“简化版图案预览窗口”
-                Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("即将弹出 Hatch 图案预览库...");
+                // 弹出自定义图案预览窗口
+                var selector = new PatternSelectorWindow();
+                selector.Owner = this; // 设置所有者，确保居中显示且任务栏一致
+
+                if (selector.ShowDialog() == true)
+                {
+                    // 选中确认后立即关闭，并更新模型数据
+                    item.PatternName = selector.SelectedPatternName;
+                }
             }
             else
             {
-                // 弹出图片选择对话框
+                // Image 模式保持原有的文件选择逻辑
                 var dialog = new Microsoft.Win32.OpenFileDialog
                 {
                     Filter = "图片材质|*.png;*.jpg;*.jpeg;*.bmp",
-                    Title = "选择材质图片"
+                    InitialDirectory = System.IO.Path.Combine(
+                        System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                        "Resources", "Materials")
                 };
                 if (dialog.ShowDialog() == true)
                 {
-                    item.PatternName = dialog.FileName;
+                    item.PatternName = System.IO.Path.GetFileName(dialog.FileName);
                 }
+            }
+        }
+        /// <summary>
+        /// 加载图案库：自动检查并创建目录，随后扫描 .pat 文件和隐藏的缩略图
+        /// </summary>
+        private void LoadPatterns()
+        {
+            try
+            {
+                // 1. 获取并初始化路径
+                string rootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string patternsPath = Path.Combine(rootDir, "Resources", "Patterns");
+                string thumbsPath = Path.Combine(patternsPath, ".hatch_thumbs");
+
+                // 2. 自动创建缺失的文件夹（含隐藏缩略图文件夹）
+                if (!Directory.Exists(patternsPath)) Directory.CreateDirectory(patternsPath);
+                if (!Directory.Exists(thumbsPath)) Directory.CreateDirectory(thumbsPath);
+
+                _allPatterns.Clear();
+
+                // 3. 扫描 .pat 文件
+                if (Directory.Exists(patternsPath))
+                {
+                    var files = Directory.GetFiles(patternsPath, "*.pat");
+                    foreach (var file in files)
+                    {
+                        string name = Path.GetFileNameWithoutExtension(file);
+                        string thumb = Path.Combine(thumbsPath, name + ".png");
+
+                        _allPatterns.Add(new PatternItem
+                        {
+                            Name = name,
+                            // 如果缩略图存在则使用，否则可留空由 XAML 占位处理
+                            ThumbnailPath = File.Exists(thumb) ? thumb : null,
+                            IsFavorite = false // 后续由 Json 配置文件填充
+                        });
+                    }
+                }
+
+                // 4. 刷新界面显示
+                RefreshDisplay();
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show("扫描图案库时发生异常: " + ex.Message);
             }
         }
     }
