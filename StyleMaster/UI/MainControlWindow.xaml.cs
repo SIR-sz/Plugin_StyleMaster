@@ -3,6 +3,7 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
 using StyleMaster.Models;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
@@ -110,34 +111,63 @@ namespace StyleMaster.UI
             var item = btn?.DataContext as MaterialItem;
             if (item == null) return;
 
-            // ✨ 修正：显式指定 AutoCAD 窗体色盘
             Autodesk.AutoCAD.Windows.ColorDialog dlg = new Autodesk.AutoCAD.Windows.ColorDialog();
             dlg.Color = item.CadColor;
 
-            // ✨ 修正：显式指定 System.Windows.Forms.DialogResult
             if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
                 item.CadColor = dlg.Color;
-                // 同步更新 UI 预览色块
-                item.PreviewBrush = ConvertCadColorToBrush(dlg.Color);
+                // ✨ 修改：传入 item.LayerName
+                item.PreviewBrush = ConvertCadColorToBrush(dlg.Color, item.LayerName);
             }
         }
-
         /// <summary>
-        /// 辅助方法：将 AutoCAD 的 Color 对象转换为 WPF 可用的 SolidColorBrush。
-        /// 显式引用 System.Drawing.Color 解决跨库颜色转换问题。
+        /// 当列表数据发生变动（如图层名改变）时，统一刷新所有预览色块。
         /// </summary>
-        /// <param name="cadColor">AutoCAD 颜色对象</param>
-        /// <returns>WPF 颜色画刷</returns>
-        private System.Windows.Media.Brush ConvertCadColorToBrush(Autodesk.AutoCAD.Colors.Color cadColor)
+        private void RefreshAllPreviews()
         {
-            // 如果是随层，显示为灰色虚位
-            if (cadColor.IsByLayer) return System.Windows.Media.Brushes.Gray;
+            foreach (var item in MaterialItems)
+            {
+                item.PreviewBrush = ConvertCadColorToBrush(item.CadColor, item.LayerName);
+            }
+        }
+        /// <summary>
+        /// 辅助方法：将 AutoCAD 的 Color 对象转换为 WPF 画刷。
+        /// 如果是“随层”，则自动从 CAD 图层表中获取该图层的真实颜色。
+        /// </summary>
+        private System.Windows.Media.Brush ConvertCadColorToBrush(Autodesk.AutoCAD.Colors.Color cadColor, string layerName)
+        {
+            // 默认回退色（若读取失败则显示灰色）
+            var defaultBrush = System.Windows.Media.Brushes.Gray;
 
-            // ✨ 修正：显式使用 System.Drawing.Color 获取 RGB 值
-            System.Drawing.Color gdiColor = cadColor.ColorValue;
+            // 情况 A：随层 (ByLayer)
+            if (cadColor.IsByLayer)
+            {
+                var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+                if (doc != null && !string.IsNullOrEmpty(layerName))
+                {
+                    // 使用 OpenClose 事务快速读取数据库
+                    using (var tr = doc.Database.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        var lt = (LayerTable)tr.GetObject(doc.Database.LayerTableId, OpenMode.ForRead);
+                        if (lt.Has(layerName))
+                        {
+                            var ltr = (LayerTableRecord)tr.GetObject(lt[layerName], OpenMode.ForRead);
+
+                            // 抓取图层定义的 ColorValue (GDI 颜色)
+                            System.Drawing.Color gdiColor = ltr.Color.ColorValue;
+                            return new System.Windows.Media.SolidColorBrush(
+                                System.Windows.Media.Color.FromRgb(gdiColor.R, gdiColor.G, gdiColor.B));
+                        }
+                    }
+                }
+                return defaultBrush;
+            }
+
+            // 情况 B：指定了具体颜色（真彩色或索引色）
+            System.Drawing.Color c = cadColor.ColorValue;
             return new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(gdiColor.R, gdiColor.G, gdiColor.B));
+                System.Windows.Media.Color.FromRgb(c.R, c.G, c.B));
         }
         /// <summary>
         /// 初始化测试数据。
@@ -303,67 +333,49 @@ namespace StyleMaster.UI
         {
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (doc == null) return;
+
             var ed = doc.Editor;
 
-            this.Hide();
+            // 1. 让用户在 CAD 中选择对象
+            var promptOptions = new PromptSelectionOptions { MessageForAdding = "\n请选择图纸范围内的对象以提取图层: " };
+            var selectionResult = ed.GetSelection(promptOptions);
 
-            try
+            if (selectionResult.Status != PromptStatus.OK) return;
+
+            // 2. 提取唯一的图层名集合
+            var selectedLayerNames = new HashSet<string>();
+            using (var tr = doc.Database.TransactionManager.StartTransaction())
             {
-                TypedValue[] tvs = new TypedValue[]
+                foreach (SelectedObject selObj in selectionResult.Value)
                 {
-                    new TypedValue((int)DxfCode.Operator, "<OR"),
-                    new TypedValue((int)DxfCode.Start, "LWPOLYLINE"),
-                    new TypedValue((int)DxfCode.Start, "POLYLINE"),
-                    new TypedValue((int)DxfCode.Operator, "OR>")
-                };
-                SelectionFilter filter = new SelectionFilter(tvs);
-
-                PromptSelectionResult psr = ed.GetSelection(filter);
-
-                if (psr.Status == PromptStatus.OK)
-                {
-                    using (var tr = doc.TransactionManager.StartTransaction())
-                    {
-                        var pickedLayers = new System.Collections.Generic.HashSet<string>();
-
-                        foreach (ObjectId id in psr.Value.GetObjectIds())
-                        {
-                            var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                            if (ent != null)
-                            {
-                                pickedLayers.Add(ent.Layer);
-                            }
-                        }
-
-                        int addCount = 0;
-                        foreach (var layerName in pickedLayers)
-                        {
-                            if (!MaterialItems.Any(x => x.LayerName == layerName))
-                            {
-                                MaterialItems.Add(new MaterialItem
-                                {
-                                    LayerName = layerName,
-                                    FillMode = FillType.Hatch,
-                                    PatternName = "SOLID"
-                                });
-                                addCount++;
-                            }
-                        }
-
-                        RefreshPriorities();
-                        ed.WriteMessage($"\n[StyleMaster] 拾取完成：识别到 {pickedLayers.Count} 个图层，其中新增 {addCount} 个。");
-                        tr.Commit();
-                    }
+                    if (selObj == null) continue;
+                    var ent = tr.GetObject(selObj.ObjectId, OpenMode.ForRead) as Entity;
+                    if (ent != null) selectedLayerNames.Add(ent.Layer);
                 }
             }
-            catch (System.Exception ex) // 显式指定 System.Exception 避免歧义
+
+            // 3. 将新图层添加进 MaterialItems 集合
+            foreach (var layerName in selectedLayerNames)
             {
-                ed.WriteMessage($"\n[错误] 拾取失败: {ex.Message}");
-            }
-            finally
-            {
-                this.Show();
-                this.Activate();
+                // 检查是否已经存在于列表中，避免重复添加
+                if (MaterialItems.Any(x => x.LayerName.Equals(layerName, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                var newItem = new MaterialItem
+                {
+                    LayerName = layerName,
+                    Priority = MaterialItems.Count + 1,
+                    FillMode = FillType.Hatch,
+                    PatternName = "SOLID",
+                    Opacity = 0,
+                    // 默认颜色设置为：随层 (ByLayer)
+                    CadColor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256)
+                };
+
+                // ✨ 关键点：在加入列表前，立即计算“随层”颜色并赋值给预览色块
+                newItem.PreviewBrush = ConvertCadColorToBrush(newItem.CadColor, newItem.LayerName);
+
+                MaterialItems.Add(newItem);
             }
         }
 
@@ -494,7 +506,7 @@ namespace StyleMaster.UI
 
         /// <summary>
         /// 列表行内“刷新”按钮点击事件。
-        /// 针对该行对应的特定图层，执行“先删后填”的局部刷新操作。
+        /// 传入当前项以及完整的 MaterialItems 集合以进行层级修正。
         /// </summary>
         private void RefreshLayer_Click(object sender, RoutedEventArgs e)
         {
@@ -504,8 +516,8 @@ namespace StyleMaster.UI
 
             try
             {
-                // 调用渲染服务对单个图层进行刷新
-                Services.CadRenderingService.RefreshSingleLayer(item);
+                // 传入 MaterialItems 用于计算 DrawOrder
+                Services.CadRenderingService.RefreshSingleLayer(item, MaterialItems);
             }
             catch (System.Exception ex)
             {
