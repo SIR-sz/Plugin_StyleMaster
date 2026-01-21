@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+
 namespace StyleMaster.Services
 {
     public class CadRenderingService
@@ -15,59 +16,46 @@ namespace StyleMaster.Services
         {
             var doc = Application.DocumentManager.MdiActiveDocument;
             var db = doc.Database;
-            var ed = doc.Editor;
-
-            var sortedItems = items.OrderByDescending(x => x.Priority).ToList();
-
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                BlockTableRecord btr = tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite) as BlockTableRecord;
-
-                foreach (var item in sortedItems)
+                var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
+                foreach (var item in items.OrderByDescending(x => x.Priority))
                 {
-                    // 这里需要根据图层获取实体的逻辑
-                    var ids = GetEntitiesOnLayer(db, tr, item.LayerName);
-                    if (ids.Count == 0) continue;
-
+                    var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
                     foreach (ObjectId id in ids)
                     {
-                        if (item.FillMode == FillType.Hatch)
-                        {
-                            CreateHatch(tr, btr, id, item);
-                        }
+                        if (item.FillMode == FillType.Hatch) CreateHatch(tr, btr, id, item);
                     }
                 }
                 tr.Commit();
             }
         }
 
-        private static List<ObjectId> GetEntitiesOnLayer(Database db, Transaction tr, string layerName)
+        private static List<ObjectId> GetEntitiesOnLayer(BlockTableRecord btr, Transaction tr, string layer)
         {
-            var result = new List<ObjectId>();
-            BlockTableRecord btr = tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
+            var list = new List<ObjectId>();
             foreach (ObjectId id in btr)
             {
-                var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                if (ent != null && ent.Layer.Equals(layerName, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (ent is Polyline || ent is Polyline2d) result.Add(id);
-                }
+                var ent = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                if (ent.Layer.Equals(layer, System.StringComparison.OrdinalIgnoreCase) && ent is Curve)
+                    list.Add(id);
             }
-            return result;
+            return list;
         }
 
-        private static void CreateHatch(Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings)
+        // 在 StyleMaster/Services/CadRenderingService.cs 中
+        private static void CreateHatch(Autodesk.AutoCAD.DatabaseServices.Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings)
         {
             Hatch hat = new Hatch();
-            hat.SetDatabaseDefaults(); // 建议加上，初始化默认值
+            hat.SetDatabaseDefaults();
             btr.AppendEntity(hat);
+
+            // 确保使用全限定名以解决 CS1061 错误
             tr.AddNewlyCreatedObject(hat, true);
 
-            // ✨ 修复：使用 PreDefined 而非 Predefined
+            // 修复之前的 PreDefined 拼写问题（注意 D 为大写）
             hat.SetHatchPattern(HatchPatternType.PreDefined, settings.PatternName);
             hat.PatternScale = settings.Scale;
-
-            // 处理透明度
             hat.Transparency = new Transparency((byte)(255 * (1 - settings.Opacity / 100.0)));
 
             ObjectIdCollection ids = new ObjectIdCollection();

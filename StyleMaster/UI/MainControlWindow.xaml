@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:Models="clr-namespace:StyleMaster.Models"
+       xmlns:Models="clr-namespace:StyleMaster.Models;assembly=StyleMaster"
         mc:Ignorable="d"
         Title="StyleMaster" Height="600" Width="850"
         WindowStyle="None" AllowsTransparency="True" 
@@ -57,10 +57,8 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBox">
                         <Grid>
-                            <ToggleButton Name="ToggleButton" 
-                                          BorderBrush="{TemplateBinding BorderBrush}" 
-                                          Background="{TemplateBinding Background}"
-                                          Foreground="{TemplateBinding Foreground}"
+                            <ToggleButton Name="ToggleButton" BorderBrush="{TemplateBinding BorderBrush}" 
+                                          Background="{TemplateBinding Background}" Foreground="{TemplateBinding Foreground}"
                                           Grid.Column="2" Focusable="false" 
                                           IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" 
                                           ClickMode="Press">
@@ -124,9 +122,7 @@
         </Style>
     </Window.Resources>
 
-    <Border Background="{StaticResource MainBgBrush}" 
-            BorderBrush="{StaticResource BorderBrush}" 
-            BorderThickness="1" CornerRadius="3">
+    <Border Background="{StaticResource MainBgBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="32"/>
@@ -135,105 +131,59 @@
                 <RowDefinition Height="25"/>
             </Grid.RowDefinitions>
 
-            <Grid Name="TitleBar" Grid.Row="0" Background="{StaticResource TitleBarBrush}" MouseDown="TitleBar_MouseDown">
+            <Grid Grid.Row="0" Background="{StaticResource TitleBarBrush}" MouseDown="TitleBar_MouseDown">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0">
                     <TextBlock Text="🎨" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBlock Text="StyleMaster - 彩平大师" Foreground="{StaticResource TextBrush}" 
-                               FontWeight="Bold" VerticalAlignment="Center" FontSize="12"/>
+                    <TextBlock Text="StyleMaster - 彩平大师" Foreground="{StaticResource TextBrush}" FontWeight="Bold" FontSize="12" VerticalAlignment="Center"/>
                 </StackPanel>
-
-                <Button Content="✕" HorizontalAlignment="Right" Width="45" 
-                        Background="Transparent" Foreground="Gray" BorderThickness="0"
-                        Click="Close_Click"/>
+                <Button Content="✕" HorizontalAlignment="Right" Width="45" Background="Transparent" Foreground="Gray" BorderThickness="0" Click="Close_Click"/>
             </Grid>
 
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Background="#252526" Margin="0,1">
-                <ComboBox Style="{StaticResource DarkComboBox}" Width="150" Height="28" Margin="10,0" VerticalContentAlignment="Center" SelectedIndex="0">
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Background="#252526">
+                <ComboBox Style="{StaticResource DarkComboBox}" Width="150" Height="28" Margin="10,0" SelectedIndex="0">
                     <ComboBoxItem Content="[默认方案] 森林系"/>
-                    <ComboBoxItem Content="现代简约方案"/>
                 </ComboBox>
-
                 <Button Style="{StaticResource ModernBtn}" Content="拾取图纸范围" Margin="5,0" Click="PickLayers_Click"/>
                 <Button Style="{StaticResource ModernBtn}" Content="智能匹配" Margin="5,0" Click="SmartMatch_Click"/>
                 <Separator Margin="10,10" Background="{StaticResource BorderBrush}"/>
                 <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}" Click="RunFill_Click"/>
             </StackPanel>
 
-            <DataGrid Grid.Row="2" Name="MainDataGrid" 
-                      Background="Transparent" BorderThickness="0" 
-                      AutoGenerateColumns="False" CanUserAddRows="False"
-                      RowBackground="#2D2D2D" AlternatingRowBackground="#252526"
-                      Foreground="{StaticResource TextBrush}" GridLinesVisibility="None"
-                      HeadersVisibility="Column" HorizontalGridLinesBrush="#333333"
-                      PreviewMouseMove="DataGrid_PreviewMouseMove"
-                      PreviewKeyDown="MainDataGrid_PreviewKeyDown"
-                      Drop="DataGrid_Drop"
-                      AllowDrop="True"
-                      ItemsSource="{Binding MaterialItems}">
+            <DataGrid Grid.Row="2" Name="MainDataGrid" ItemsSource="{Binding MaterialItems}"
+                      AutoGenerateColumns="False" CanUserAddRows="False" Background="Transparent" BorderThickness="0"
+                      RowBackground="#2D2D2D" AlternatingRowBackground="#252526" Foreground="{StaticResource TextBrush}"
+                      PreviewMouseMove="DataGrid_PreviewMouseMove" PreviewKeyDown="MainDataGrid_PreviewKeyDown"
+                      Drop="DataGrid_Drop" AllowDrop="True">
                 <DataGrid.Resources>
                     <Style TargetType="DataGridColumnHeader">
                         <Setter Property="Background" Value="#2D2D2D"/>
                         <Setter Property="Foreground" Value="#999999"/>
                         <Setter Property="Padding" Value="10,5"/>
                         <Setter Property="HorizontalContentAlignment" Value="Left"/>
-                        <Setter Property="VerticalContentAlignment" Value="Center"/>
                         <Setter Property="BorderThickness" Value="0,0,0,1"/>
                         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
                     </Style>
-
-                    <Style TargetType="DataGridCell">
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="{x:Type DataGridCell}">
-                                    <Border Padding="10,0" Background="Transparent" BorderThickness="0">
-                                        <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Left" />
-                                    </Border>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                        <Style.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="#3F3F46"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
                 </DataGrid.Resources>
-
-                <DataGrid.ContextMenu>
-                    <ContextMenu>
-                        <MenuItem Header="删除选中行" Click="MenuDelete_Click"/>
-                        <Separator/>
-                        <MenuItem Header="清空所有图层" Click="MenuClearAll_Click"/>
-                    </ContextMenu>
-                </DataGrid.ContextMenu>
-
                 <DataGrid.Columns>
                     <DataGridTemplateColumn Header="排序" Width="50">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBlock Text="⋮⋮" Foreground="#555555" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="10,0" FontSize="16" Cursor="SizeAll"/>
+                                <TextBlock Text="⋮⋮" Foreground="#555555" HorizontalAlignment="Center" Cursor="SizeAll"/>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-
                     <DataGridTextColumn Header="层级" Binding="{Binding Priority}" Width="60" IsReadOnly="True"/>
                     <DataGridTextColumn Header="识别图层" Binding="{Binding LayerName}" Width="150" IsReadOnly="True"/>
-
                     <DataGridTemplateColumn Header="填充模式" Width="100">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <ComboBox Style="{StaticResource DarkComboBox}"
-                                          SelectedValue="{Binding FillMode, UpdateSourceTrigger=PropertyChanged}" 
-                                          SelectedValuePath="Tag"
-                                          Height="22" BorderThickness="0">
+                                <ComboBox Style="{StaticResource DarkComboBox}" SelectedValue="{Binding FillMode}" SelectedValuePath="Tag">
                                     <ComboBoxItem Content="Hatch" Tag="{x:Static Models:FillType.Hatch}"/>
                                     <ComboBoxItem Content="Image" Tag="{x:Static Models:FillType.Image}"/>
                                 </ComboBox>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-
                     <DataGridTemplateColumn Header="材质图案" Width="*">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
@@ -243,17 +193,15 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="{Binding PatternName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                    <Button Grid.Column="1" Content="..." Width="25" Height="18" Margin="5,0" 
-                                            Style="{StaticResource ModernBtn}" Padding="0" Click="SelectMaterial_Click"/>
+                                    <Button Grid.Column="1" Content="..." Style="{StaticResource ModernBtn}" Width="25" Click="SelectMaterial_Click"/>
                                 </Grid>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-
                     <DataGridTextColumn Header="前景色" Binding="{Binding ForeColor}" Width="100" CellStyle="{StaticResource ColorColumnStyle}"/>
                     <DataGridTextColumn Header="背景色" Binding="{Binding BackColor}" Width="100" CellStyle="{StaticResource ColorColumnStyle}"/>
-                    <DataGridTextColumn Header="比例" Binding="{Binding Scale}" Width="80"/>
-                    <DataGridTextColumn Header="透明度" Binding="{Binding Opacity}" Width="80"/>
+                    <DataGridTextColumn Header="比例" Binding="{Binding Scale}" Width="60"/>
+                    <DataGridTextColumn Header="透明度" Binding="{Binding Opacity}" Width="60"/>
                 </DataGrid.Columns>
             </DataGrid>
 

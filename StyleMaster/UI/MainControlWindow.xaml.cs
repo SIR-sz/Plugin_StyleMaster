@@ -4,9 +4,7 @@ using Autodesk.AutoCAD.Runtime;
 using StyleMaster.Models;
 using System;
 using System.Collections.ObjectModel;
-using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -38,6 +36,7 @@ namespace StyleMaster.UI
             this.DataContext = this;
             this.MainDataGrid.ItemsSource = MaterialItems;
         }
+
         /// <summary>
         /// 按照指南规范提供的静态启动方法
         /// 处理单例显示逻辑
@@ -76,6 +75,7 @@ namespace StyleMaster.UI
         {
             this.Close();
         }
+
         /// <summary>
         /// 当鼠标在 DataGrid 上移动时触发，用于检测并启动拖拽操作
         /// </summary>
@@ -97,7 +97,6 @@ namespace StyleMaster.UI
 
         /// <summary>
         /// 填充初期测试数据，用于验证 UI 效果
-        /// 修复说明：将字符串直接赋值改为使用 FillType 枚举值
         /// </summary>
         private void InitializeTestData()
         {
@@ -106,6 +105,7 @@ namespace StyleMaster.UI
             MaterialItems.Add(new MaterialItem { Priority = 3, LayerName = "AR-铺装", FillMode = FillType.Image, PatternName = "石材01.png", Scale = 2.0 });
             RefreshPriorities();
         }
+
         /// <summary>
         /// 右键菜单：清空所有图层项
         /// </summary>
@@ -121,6 +121,7 @@ namespace StyleMaster.UI
                 }
             }
         }
+
         /// <summary>
         /// 核心逻辑：处理拖拽完成后的数据交换与重排
         /// </summary>
@@ -139,16 +140,15 @@ namespace StyleMaster.UI
 
                     if (oldIndex != newIndex && oldIndex != -1 && newIndex != -1)
                     {
-                        // 在集合中移动元素
                         MaterialItems.Move(oldIndex, newIndex);
-                        // 重新计算并更新所有行的 Priority 数字
                         RefreshPriorities();
                     }
                 }
             }
         }
+
         /// <summary>
-        /// [辅助逻辑] 重新计算并刷新集合中所有材质项的层级编号 (1, 2, 3...)
+        /// 重新计算并刷新集合中所有材质项的层级编号 (1, 2, 3...)
         /// </summary>
         private void RefreshPriorities()
         {
@@ -159,6 +159,7 @@ namespace StyleMaster.UI
                 MaterialItems[i].Priority = i + 1;
             }
         }
+
         /// <summary>
         /// 拾取图纸范围按钮点击事件：自动提取选中多段线的图层
         /// </summary>
@@ -168,12 +169,10 @@ namespace StyleMaster.UI
             if (doc == null) return;
             var ed = doc.Editor;
 
-            // 1. 暂时隐藏窗口，避免挡住 CAD 操作界面
             this.Hide();
 
             try
             {
-                // 2. 设置选择过滤器：只选择多段线
                 TypedValue[] tvs = new TypedValue[]
                 {
                     new TypedValue((int)DxfCode.Operator, "<OR"),
@@ -183,7 +182,6 @@ namespace StyleMaster.UI
                 };
                 SelectionFilter filter = new SelectionFilter(tvs);
 
-                // 3. 提示用户进行框选
                 PromptSelectionResult psr = ed.GetSelection(filter);
 
                 if (psr.Status == PromptStatus.OK)
@@ -197,16 +195,13 @@ namespace StyleMaster.UI
                             var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
                             if (ent != null)
                             {
-                                // 提取图层名
                                 pickedLayers.Add(ent.Layer);
                             }
                         }
 
-                        // 4. 将新图层合并到 DataGrid 的数据源中
                         int addCount = 0;
                         foreach (var layerName in pickedLayers)
                         {
-                            // 检查是否已存在，避免重复添加
                             if (!MaterialItems.Any(x => x.LayerName == layerName))
                             {
                                 MaterialItems.Add(new MaterialItem
@@ -219,23 +214,85 @@ namespace StyleMaster.UI
                             }
                         }
 
-                        // 5. 刷新界面层级数字
                         RefreshPriorities();
-
                         ed.WriteMessage($"\n[StyleMaster] 拾取完成：识别到 {pickedLayers.Count} 个图层，其中新增 {addCount} 个。");
                         tr.Commit();
                     }
                 }
             }
-            catch (System.Exception ex)
+            catch (System.Exception ex) // 显式指定 System.Exception 避免歧义
             {
                 ed.WriteMessage($"\n[错误] 拾取失败: {ex.Message}");
             }
             finally
             {
-                // 6. 无论操作是否成功或取消，都必须重新显示窗口
                 this.Show();
-                this.Activate(); // 确保窗口回到最前
+                this.Activate();
+            }
+        }
+
+        /// <summary>
+        /// 智能匹配按钮点击事件
+        /// </summary>
+        private void SmartMatch_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("智能匹配功能正在开发中...");
+        }
+
+        /// <summary>
+        /// 一键填充按钮点击事件
+        /// </summary>
+        private void RunFill_Click(object sender, RoutedEventArgs e)
+        {
+            if (MaterialItems == null || MaterialItems.Count == 0)
+            {
+                MessageBox.Show("列表为空，请先拾取图层。");
+                return;
+            }
+
+            try
+            {
+                // 调用渲染服务执行填充逻辑
+                Services.CadRenderingService.ExecuteFill(MaterialItems);
+            }
+            catch (System.Exception ex)
+            {
+                MessageBox.Show("填充失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 材质选择按钮点击逻辑：针对 Hatch 模式弹出预览选择窗口
+        /// </summary>
+        private void SelectMaterial_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            var item = btn?.DataContext as MaterialItem;
+            if (item == null) return;
+
+            if (item.FillMode == FillType.Hatch)
+            {
+                var selector = new PatternSelectorWindow();
+                selector.Owner = this;
+
+                if (selector.ShowDialog() == true)
+                {
+                    item.PatternName = selector.SelectedPatternName;
+                }
+            }
+            else
+            {
+                var dialog = new Microsoft.Win32.OpenFileDialog
+                {
+                    Filter = "图片材质|*.png;*.jpg;*.jpeg;*.bmp",
+                    InitialDirectory = System.IO.Path.Combine(
+                        System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                        "Resources", "Materials")
+                };
+                if (dialog.ShowDialog() == true)
+                {
+                    item.PatternName = System.IO.Path.GetFileName(dialog.FileName);
+                }
             }
         }
 
@@ -266,81 +323,12 @@ namespace StyleMaster.UI
         {
             if (MainDataGrid.SelectedItems.Count > 0)
             {
-                // 注意：由于正在遍历，需转为 List 处理
                 var itemsToRemove = MainDataGrid.SelectedItems.Cast<MaterialItem>().ToList();
                 foreach (var item in itemsToRemove)
                 {
                     MaterialItems.Remove(item);
                 }
                 RefreshPriorities();
-            }
-        }
-
-        /// <summary>
-        /// 材质选择按钮点击逻辑：针对 Hatch 模式弹出预览选择窗口
-        /// </summary>
-        private void SelectMaterial_Click(object sender, RoutedEventArgs e)
-        {
-            var btn = sender as System.Windows.Controls.Button;
-            var item = btn?.DataContext as MaterialItem;
-            if (item == null) return;
-
-            if (item.FillMode == FillType.Hatch)
-            {
-                // 弹出自定义图案预览窗口
-                var selector = new PatternSelectorWindow();
-                selector.Owner = this; // 设置所有者，确保居中显示且任务栏一致
-
-                if (selector.ShowDialog() == true)
-                {
-                    // 选中确认后立即关闭，并更新模型数据
-                    item.PatternName = selector.SelectedPatternName;
-                }
-            }
-            else
-            {
-                // Image 模式保持原有的文件选择逻辑
-                var dialog = new Microsoft.Win32.OpenFileDialog
-                {
-                    Filter = "图片材质|*.png;*.jpg;*.jpeg;*.bmp",
-                    InitialDirectory = System.IO.Path.Combine(
-                        System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
-                        "Resources", "Materials")
-                };
-                if (dialog.ShowDialog() == true)
-                {
-                    item.PatternName = System.IO.Path.GetFileName(dialog.FileName);
-                }
-            }
-        }
-        /// <summary>
-        /// “智能匹配”按钮点击事件（暂留接口，后期实现算法）
-        /// </summary>
-        private void SmartMatch_Click(object sender, RoutedEventArgs e)
-        {
-            // TODO: 调用 MaterialService 执行模糊匹配逻辑
-            Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage("\n[StyleMaster] 正在开发中：将根据图层关键字自动匹配库中材质...");
-        }
-
-        /// <summary>
-        /// “一键填充”按钮点击事件
-        /// </summary>
-        private void RunFill_Click(object sender, RoutedEventArgs e)
-        {
-            if (MaterialItems == null || MaterialItems.Count == 0)
-            {
-                System.Windows.MessageBox.Show("列表为空，请先拾取图层。");
-                return;
-            }
-
-            try
-            {
-                // 调用渲染服务执行填充
-                StyleMaster.Services.CadRenderingService.ExecuteFill(MaterialItems);
-            }
-            catch (System.Exception ex)
-            {
-                Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("填充失败: " + ex.Message);
             }
         }
     }
