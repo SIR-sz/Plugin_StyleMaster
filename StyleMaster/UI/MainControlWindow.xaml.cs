@@ -314,48 +314,33 @@ namespace StyleMaster.UI
             }
         }
         /// <summary>
-        /// 加载图案库：自动检查并创建目录，随后扫描 .pat 文件和隐藏的缩略图
+        /// “智能匹配”按钮点击事件（暂留接口，后期实现算法）
         /// </summary>
-        private void LoadPatterns()
+        private void SmartMatch_Click(object sender, RoutedEventArgs e)
         {
+            // TODO: 调用 MaterialService 执行模糊匹配逻辑
+            Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage("\n[StyleMaster] 正在开发中：将根据图层关键字自动匹配库中材质...");
+        }
+
+        /// <summary>
+        /// “一键填充”按钮点击事件
+        /// </summary>
+        private void RunFill_Click(object sender, RoutedEventArgs e)
+        {
+            if (MaterialItems == null || MaterialItems.Count == 0)
+            {
+                System.Windows.MessageBox.Show("列表为空，请先拾取图层。");
+                return;
+            }
+
             try
             {
-                // 1. 获取并初始化路径
-                string rootDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                string patternsPath = Path.Combine(rootDir, "Resources", "Patterns");
-                string thumbsPath = Path.Combine(patternsPath, ".hatch_thumbs");
-
-                // 2. 自动创建缺失的文件夹（含隐藏缩略图文件夹）
-                if (!Directory.Exists(patternsPath)) Directory.CreateDirectory(patternsPath);
-                if (!Directory.Exists(thumbsPath)) Directory.CreateDirectory(thumbsPath);
-
-                _allPatterns.Clear();
-
-                // 3. 扫描 .pat 文件
-                if (Directory.Exists(patternsPath))
-                {
-                    var files = Directory.GetFiles(patternsPath, "*.pat");
-                    foreach (var file in files)
-                    {
-                        string name = Path.GetFileNameWithoutExtension(file);
-                        string thumb = Path.Combine(thumbsPath, name + ".png");
-
-                        _allPatterns.Add(new PatternItem
-                        {
-                            Name = name,
-                            // 如果缩略图存在则使用，否则可留空由 XAML 占位处理
-                            ThumbnailPath = File.Exists(thumb) ? thumb : null,
-                            IsFavorite = false // 后续由 Json 配置文件填充
-                        });
-                    }
-                }
-
-                // 4. 刷新界面显示
-                RefreshDisplay();
+                // 调用渲染服务执行填充
+                StyleMaster.Services.CadRenderingService.ExecuteFill(MaterialItems);
             }
-            catch (Exception ex)
+            catch (System.Exception ex)
             {
-                System.Windows.MessageBox.Show("扫描图案库时发生异常: " + ex.Message);
+                Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("填充失败: " + ex.Message);
             }
         }
     }

@@ -46,14 +46,14 @@ namespace StyleMaster.UI
                     _allPatterns.Add(new PatternItem
                     {
                         Name = name,
-                        ThumbnailPath = File.Exists(thumb) ? thumb : "", // 如果没缩略图可设为占位图
+                        ThumbnailPath = File.Exists(thumb) ? thumb : null, // ✨ 改为 null
                         IsFavorite = favorites.Contains(name)
                     });
                 }
 
                 RefreshDisplay();
             }
-            catch (Exception ex)
+            catch (System.Exception ex) // ✨ 显式指定 System 命名空间
             {
                 MessageBox.Show("加载图案库失败: " + ex.Message);
             }

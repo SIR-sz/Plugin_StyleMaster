@@ -153,14 +153,10 @@
                     <ComboBoxItem Content="现代简约方案"/>
                 </ComboBox>
 
-                <Button Style="{StaticResource ModernBtn}" 
-                        Content="拾取图纸范围" 
-                        Margin="5,0" 
-                        Click="PickLayers_Click"/>
-
-                <Button Style="{StaticResource ModernBtn}" Content="智能匹配" Margin="5,0"/>
+                <Button Style="{StaticResource ModernBtn}" Content="拾取图纸范围" Margin="5,0" Click="PickLayers_Click"/>
+                <Button Style="{StaticResource ModernBtn}" Content="智能匹配" Margin="5,0" Click="SmartMatch_Click"/>
                 <Separator Margin="10,10" Background="{StaticResource BorderBrush}"/>
-                <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}"/>
+                <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}" Click="RunFill_Click"/>
             </StackPanel>
 
             <DataGrid Grid.Row="2" Name="MainDataGrid" 
@@ -260,7 +256,6 @@
                     <DataGridTextColumn Header="透明度" Binding="{Binding Opacity}" Width="80"/>
                 </DataGrid.Columns>
             </DataGrid>
-
 
             <StatusBar Grid.Row="3" Background="#007ACC" Foreground="White">
                 <TextBlock Text=" 就绪 | 请选择闭合多段线开始操作" FontSize="10" Margin="5,0"/>
