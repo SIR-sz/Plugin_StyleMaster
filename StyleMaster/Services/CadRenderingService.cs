@@ -14,6 +14,80 @@ namespace StyleMaster.Services
     public class CadRenderingService
     {
         /// <summary>
+        /// 清除指定图层列表上的所有 Hatch 填充实体。
+        /// </summary>
+        /// <param name="layerNames">需要清理的图层名称集合</param>
+        public static void ClearFillsOnLayers(System.Collections.Generic.IEnumerable<string> layerNames)
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+
+            using (doc.LockDocument())
+            {
+                using (var tr = doc.Database.TransactionManager.StartTransaction())
+                {
+                    var btr = (Autodesk.AutoCAD.DatabaseServices.BlockTableRecord)tr.GetObject(doc.Database.CurrentSpaceId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+                    int count = 0;
+
+                    foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in btr)
+                    {
+                        var ent = tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Entity;
+                        if (ent is Autodesk.AutoCAD.DatabaseServices.Hatch hatch && layerNames.Any(l => l.Equals(hatch.Layer, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+                            ent.Erase();
+                            count++;
+                        }
+                    }
+                    tr.Commit();
+                    doc.Editor.WriteMessage($"\n[StyleMaster] 已成功清除 {count} 个填充对象。");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 刷新单个图层的填充逻辑。
+        /// 先删除该图层已有的填充，再根据当前设置项重新生成。
+        /// </summary>
+        /// <param name="item">需要刷新的材质设置项</param>
+        public static void RefreshSingleLayer(StyleMaster.Models.MaterialItem item)
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+
+            using (doc.LockDocument())
+            {
+                using (var tr = doc.Database.TransactionManager.StartTransaction())
+                {
+                    var btr = (Autodesk.AutoCAD.DatabaseServices.BlockTableRecord)tr.GetObject(doc.Database.CurrentSpaceId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+
+                    // 1. 删除该图层上现有的所有填充
+                    foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in btr)
+                    {
+                        var ent = tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Entity;
+                        if (ent is Autodesk.AutoCAD.DatabaseServices.Hatch hatch && hatch.Layer.Equals(item.LayerName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+                            ent.Erase();
+                        }
+                    }
+
+                    // 2. 重新扫描边界并创建新填充
+                    var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
+                    foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId boundaryId in ids)
+                    {
+                        if (item.FillMode == StyleMaster.Models.FillType.Hatch)
+                        {
+                            CreateHatch(tr, btr, boundaryId, item);
+                        }
+                    }
+
+                    tr.Commit();
+                    doc.Editor.WriteMessage($"\n[StyleMaster] 图层 {item.LayerName} 刷新完成。");
+                }
+            }
+        }
+        /// <summary>
         /// 执行全局一键填充逻辑。
         /// 按照优先级从底层到顶层遍历图层，并对指定图层内的多段线进行填充。
         /// </summary>
@@ -78,38 +152,44 @@ namespace StyleMaster.Services
             }
             return list;
         }
-        // 在 StyleMaster/Services/CadRenderingService.cs 中
-        private static void CreateHatch(Autodesk.AutoCAD.DatabaseServices.Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings)
+        /// <summary>
+        /// 在指定的边界内创建 Hatch 填充对象。
+        /// 应用用户选定的 AutoCAD 原生颜色，并取消背景色逻辑。
+        /// </summary>
+        private static void CreateHatch(Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings)
         {
             Hatch hat = new Hatch();
             hat.SetDatabaseDefaults();
 
-            // 1. 设置图层：确保填充生成在对应的图层上
+            // 设置图层
             hat.Layer = settings.LayerName;
 
             btr.AppendEntity(hat);
-
-            // 2. 修复：使用 AddNewlyCreatedDBObject (注意中间的 DB)
             tr.AddNewlyCreatedDBObject(hat, true);
 
-            // 3. 修复：将 ZCoordinate 修改为 Elevation
+            // 设置标高与法线
             hat.Elevation = 0.0;
-            hat.Normal = Autodesk.AutoCAD.Geometry.Vector3d.ZAxis; // 确保法线方向正确
+            hat.Normal = Autodesk.AutoCAD.Geometry.Vector3d.ZAxis;
 
-            // 4. 设置图案和比例 (注意 PreDefined 的大写 D)
+            // ✨ 核心修正：应用用户选择的颜色
+            hat.Color = settings.CadColor;
+
+            // 设置图案与比例
             hat.SetHatchPattern(HatchPatternType.PreDefined, settings.PatternName);
             hat.PatternScale = settings.Scale;
 
-            // 5. 设置透明度
-            hat.Transparency = new Autodesk.AutoCAD.Colors.Transparency((byte)(255 * (1 - settings.Opacity / 100.0)));
+            // 设置透明度
+            hat.Transparency = new Transparency((byte)(255 * (1 - settings.Opacity / 100.0)));
 
-            // 6. 设置边界并关联
+            // 设置边界
             ObjectIdCollection ids = new ObjectIdCollection { boundaryId };
             hat.Associative = true;
-            hat.AppendLoop(HatchLoopTypes.Outermost, ids); // 使用 Outermost 边界类型更稳定
+            hat.AppendLoop(HatchLoopTypes.Outermost, ids);
 
-            // 7. 关键：计算填充
+            // 评估填充
             hat.EvaluateHatch(true);
+
+            // 建议方向：在这里可以添加 DrawOrderTable 逻辑将填充置于底层
         }
     }
 }

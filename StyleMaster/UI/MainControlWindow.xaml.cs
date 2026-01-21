@@ -8,31 +8,37 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+
 
 namespace StyleMaster.UI
 {
+
     /// <summary>
     /// MainControlWindow.xaml 的交互逻辑
     /// </summary>
     public partial class MainControlWindow : Window
     {
+        private Point _dragStartPoint;
+        private MaterialItem _draggedItem;
+        private bool _isDraggingNow = false;
         private static MainControlWindow _instance;
 
         // 数据源集合
         public ObservableCollection<MaterialItem> MaterialItems { get; set; }
 
         /// <summary>
-        /// 构造函数：初始化数据集合并设置绑定上下文
+        /// 构造函数：执行 UI 初始化，并设置数据绑定上下文。
         /// </summary>
         public MainControlWindow()
         {
             InitializeComponent();
 
-            // 初始化集合并填充假数据用于原型测试
+            // 初始化集合，此时不包含任何预设测试项
             MaterialItems = new ObservableCollection<MaterialItem>();
             InitializeTestData();
 
-            // 设置 DataContext 方便 XAML 绑定
+            // 设置 DataContext 方便 XAML 进行数据绑定
             this.DataContext = this;
             this.MainDataGrid.ItemsSource = MaterialItems;
         }
@@ -94,18 +100,54 @@ namespace StyleMaster.UI
                 }
             }
         }
+        /// <summary>
+        /// 点击颜色单元格中的“...”按钮时，弹出 AutoCAD 原生色盘。
+        /// 使用显式命名空间解决 DialogResult 和 Color 的引用冲突。
+        /// </summary>
+        private void SelectColor_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as System.Windows.Controls.Button;
+            var item = btn?.DataContext as MaterialItem;
+            if (item == null) return;
+
+            // ✨ 修正：显式指定 AutoCAD 窗体色盘
+            Autodesk.AutoCAD.Windows.ColorDialog dlg = new Autodesk.AutoCAD.Windows.ColorDialog();
+            dlg.Color = item.CadColor;
+
+            // ✨ 修正：显式指定 System.Windows.Forms.DialogResult
+            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            {
+                item.CadColor = dlg.Color;
+                // 同步更新 UI 预览色块
+                item.PreviewBrush = ConvertCadColorToBrush(dlg.Color);
+            }
+        }
 
         /// <summary>
-        /// 填充初期测试数据，用于验证 UI 效果
+        /// 辅助方法：将 AutoCAD 的 Color 对象转换为 WPF 可用的 SolidColorBrush。
+        /// 显式引用 System.Drawing.Color 解决跨库颜色转换问题。
+        /// </summary>
+        /// <param name="cadColor">AutoCAD 颜色对象</param>
+        /// <returns>WPF 颜色画刷</returns>
+        private System.Windows.Media.Brush ConvertCadColorToBrush(Autodesk.AutoCAD.Colors.Color cadColor)
+        {
+            // 如果是随层，显示为灰色虚位
+            if (cadColor.IsByLayer) return System.Windows.Media.Brushes.Gray;
+
+            // ✨ 修正：显式使用 System.Drawing.Color 获取 RGB 值
+            System.Drawing.Color gdiColor = cadColor.ColorValue;
+            return new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(gdiColor.R, gdiColor.G, gdiColor.B));
+        }
+        /// <summary>
+        /// 初始化测试数据。
+        /// 当前已移除所有硬编码的测试项，确保程序启动时材质列表为空，等待用户手动拾取或导入。
         /// </summary>
         private void InitializeTestData()
         {
-            MaterialItems.Add(new MaterialItem { Priority = 1, LayerName = "AR-投影", FillMode = FillType.Hatch, PatternName = "SOLID", ForeColor = "黑色", BackColor = "None", Opacity = 50 });
-            MaterialItems.Add(new MaterialItem { Priority = 2, LayerName = "AR-草地", FillMode = FillType.Hatch, PatternName = "GRASS", ForeColor = "深绿", BackColor = "浅绿", Scale = 1.0 });
-            MaterialItems.Add(new MaterialItem { Priority = 3, LayerName = "AR-铺装", FillMode = FillType.Image, PatternName = "石材01.png", Scale = 2.0 });
+            // 已清除所有测试项代码
             RefreshPriorities();
         }
-
         /// <summary>
         /// 右键菜单：清空所有图层项
         /// </summary>
@@ -123,30 +165,124 @@ namespace StyleMaster.UI
         }
 
         /// <summary>
-        /// 核心逻辑：处理拖拽完成后的数据交换与重排
+        /// 鼠标左键按下：记录起始位置和当前行对象。
         /// </summary>
-        private void DataGrid_Drop(object sender, DragEventArgs e)
+        private void MainDataGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.Data.GetDataPresent(typeof(MaterialItem)))
+            _dragStartPoint = e.GetPosition(MainDataGrid);
+            _draggedItem = GetItemAtPoint(MainDataGrid, _dragStartPoint);
+        }
+
+        /// <summary>
+        /// 鼠标移动：判断是否触发拖拽，并实时更新影子和指示线位置。
+        /// </summary>
+        private void MainDataGrid_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed || _draggedItem == null || _isDraggingNow) return;
+
+            Point currentPos = e.GetPosition(MainDataGrid);
+            if (Math.Abs(currentPos.Y - _dragStartPoint.Y) > SystemParameters.MinimumVerticalDragDistance)
             {
-                var droppedItem = e.Data.GetData(typeof(MaterialItem)) as MaterialItem;
-                var targetRow = UIHelpers.FindVisualParent<DataGridRow>(e.OriginalSource as DependencyObject);
+                StartAnimatedDrag(e);
+            }
+        }
 
-                if (droppedItem != null && targetRow != null)
+        /// <summary>
+        /// 开始带动画的拖拽处理逻辑。
+        /// 通过显式指定 System.Windows.Visibility 解决实例引用冲突。
+        /// </summary>
+        private void StartAnimatedDrag(MouseEventArgs e)
+        {
+            _isDraggingNow = true;
+
+            // 显示并设置影子大小
+            var row = MainDataGrid.ItemContainerGenerator.ContainerFromItem(_draggedItem) as DataGridRow;
+            if (row != null)
+            {
+                DragGhost.Width = row.ActualWidth;
+                DragGhost.Height = row.ActualHeight;
+                // ✨ 修正：使用全称访问枚举
+                DragGhost.Visibility = System.Windows.Visibility.Visible;
+            }
+
+            // 执行系统拖拽
+            DragDrop.DoDragDrop(MainDataGrid, _draggedItem, DragDropEffects.Move);
+
+            // 拖拽结束：重置 UI
+            _isDraggingNow = false;
+            _draggedItem = null;
+            // ✨ 修正：使用全称访问枚举
+            DragGhost.Visibility = System.Windows.Visibility.Collapsed;
+            InsertionMarker.Visibility = System.Windows.Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// 拖拽过程中实时反馈：更新影子位置和插入线。
+        /// 修正了 Visibility 的静态引用问题。
+        /// </summary>
+        private void MainDataGrid_DragOver(object sender, DragEventArgs e)
+        {
+            e.Effects = DragDropEffects.Move;
+            Point pos = e.GetPosition(MainDataGrid);
+
+            // 更新影子位置 (锁定 X 轴)
+            Canvas.SetTop(DragGhost, pos.Y - (DragGhost.Height / 2));
+            Canvas.SetLeft(DragGhost, 0);
+
+            // 更新插入指示线位置
+            var targetItem = GetItemAtPoint(MainDataGrid, pos);
+            if (targetItem != null)
+            {
+                var row = MainDataGrid.ItemContainerGenerator.ContainerFromItem(targetItem) as DataGridRow;
+                if (row != null)
                 {
-                    var targetItem = targetRow.Item as MaterialItem;
-                    int oldIndex = MaterialItems.IndexOf(droppedItem);
-                    int newIndex = MaterialItems.IndexOf(targetItem);
+                    Point rowPos = row.TranslatePoint(new Point(0, 0), MainDataGrid);
+                    double markerY = (pos.Y > rowPos.Y + row.ActualHeight / 2) ? rowPos.Y + row.ActualHeight : rowPos.Y;
 
-                    if (oldIndex != newIndex && oldIndex != -1 && newIndex != -1)
-                    {
-                        MaterialItems.Move(oldIndex, newIndex);
-                        RefreshPriorities();
-                    }
+                    // ✨ 修正：使用全称访问枚举
+                    InsertionMarker.Visibility = System.Windows.Visibility.Visible;
+                    Canvas.SetTop(InsertionMarker, markerY);
                 }
             }
         }
 
+        /// <summary>
+        /// 拖拽落点：执行数据交换并重置辅助 UI 状态。
+        /// </summary>
+        private void DataGrid_Drop(object sender, DragEventArgs e)
+        {
+            _isDraggingNow = false;
+            // ✨ 修正：使用全称访问枚举
+            DragGhost.Visibility = System.Windows.Visibility.Collapsed;
+            InsertionMarker.Visibility = System.Windows.Visibility.Collapsed;
+
+            var droppedItem = e.Data.GetData(typeof(MaterialItem)) as MaterialItem;
+            var targetItem = GetItemAtPoint(MainDataGrid, e.GetPosition(MainDataGrid));
+
+            if (droppedItem != null && targetItem != null && droppedItem != targetItem)
+            {
+                int oldIndex = MaterialItems.IndexOf(droppedItem);
+                int newIndex = MaterialItems.IndexOf(targetItem);
+
+                MaterialItems.Move(oldIndex, newIndex);
+                RefreshPriorities();
+            }
+        }
+        /// <summary>
+        /// 辅助方法：获取坐标点下的 DataGrid 行对象。
+        /// </summary>
+        private MaterialItem GetItemAtPoint(DataGrid grid, Point pt)
+        {
+            HitTestResult hit = VisualTreeHelper.HitTest(grid, pt);
+            if (hit == null) return null;
+
+            DependencyObject parent = hit.VisualHit;
+            while (parent != null && !(parent is DataGridRow))
+            {
+                parent = VisualTreeHelper.GetParent(parent);
+            }
+            return (parent as DataGridRow)?.Item as MaterialItem;
+        }
         /// <summary>
         /// 重新计算并刷新集合中所有材质项的层级编号 (1, 2, 3...)
         /// </summary>
@@ -329,6 +465,51 @@ namespace StyleMaster.UI
                     MaterialItems.Remove(item);
                 }
                 RefreshPriorities();
+            }
+        }
+        /// <summary>
+        /// “清除填充”按钮点击事件。
+        /// 遍历当前材质列表中的所有图层，并清除这些图层上已有的填充实体。
+        /// </summary>
+        private void ClearFills_Click(object sender, RoutedEventArgs e)
+        {
+            if (MaterialItems == null || MaterialItems.Count == 0) return;
+
+            var result = System.Windows.MessageBox.Show("确定要清除当前列表中所有图层关联的填充吗？", "确认", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result == MessageBoxResult.Yes)
+            {
+                try
+                {
+                    // 提取列表中所有的图层名称
+                    var layers = MaterialItems.Select(x => x.LayerName).ToList();
+                    // 调用服务层进行批量清除
+                    Services.CadRenderingService.ClearFillsOnLayers(layers);
+                }
+                catch (System.Exception ex)
+                {
+                    System.Windows.MessageBox.Show("清除填充失败: " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 列表行内“刷新”按钮点击事件。
+        /// 针对该行对应的特定图层，执行“先删后填”的局部刷新操作。
+        /// </summary>
+        private void RefreshLayer_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as System.Windows.Controls.Button;
+            var item = btn?.DataContext as MaterialItem;
+            if (item == null) return;
+
+            try
+            {
+                // 调用渲染服务对单个图层进行刷新
+                Services.CadRenderingService.RefreshSingleLayer(item);
+            }
+            catch (System.Exception ex)
+            {
+                System.Windows.MessageBox.Show($"刷新图层 {item.LayerName} 失败: {ex.Message}");
             }
         }
     }
