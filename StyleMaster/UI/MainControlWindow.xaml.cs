@@ -504,19 +504,19 @@ namespace StyleMaster.UI
             }
         }
 
-        /// <summary>
-        /// 列表行内“刷新”按钮点击事件。
-        /// 传入当前项以及完整的 MaterialItems 集合以进行层级修正。
-        /// </summary>
         private void RefreshLayer_Click(object sender, RoutedEventArgs e)
         {
+            // ✨ 核心修复：强制 DataGrid 失去焦点并提交编辑
+            // 这样能确保 MaterialItems 中的 Scale 属性已经更新为用户输入的数字
+            MainDataGrid.CommitEdit(DataGridEditingUnit.Row, true);
+            MainDataGrid.Focus(); // 强制刷新 UI 焦点
+
             var btn = sender as System.Windows.Controls.Button;
             var item = btn?.DataContext as MaterialItem;
             if (item == null) return;
 
             try
             {
-                // 传入 MaterialItems 用于计算 DrawOrder
                 Services.CadRenderingService.RefreshSingleLayer(item, MaterialItems);
             }
             catch (System.Exception ex)

@@ -12,7 +12,7 @@ namespace StyleMaster.Services
     public static class CadRenderingService
     {
         /// <summary>
-        /// 全量同步填充：先清除旧填充，再根据列表重新生成。
+        /// 全量同步填充：先清除旧填充，再根据列表重新生成并强制重绘。
         /// </summary>
         public static void ExecuteFill(IEnumerable<MaterialItem> items)
         {
@@ -28,15 +28,7 @@ namespace StyleMaster.Services
                     var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
 
                     // 1. 清理
-                    foreach (ObjectId id in btr)
-                    {
-                        var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                        if (ent is Hatch hatch && targetLayerNames.Any(n => n.Equals(hatch.Layer, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            tr.GetObject(id, OpenMode.ForWrite);
-                            ent.Erase();
-                        }
-                    }
+                    ClearInternal(tr, btr, targetLayerNames);
 
                     // 2. 生成
                     foreach (var item in items)
@@ -53,12 +45,15 @@ namespace StyleMaster.Services
                     ReorderDrawOrder(tr, btr, items);
                     tr.Commit();
                 }
-                doc.Editor.UpdateScreen();
+
+                // ✨ 深度重绘逻辑：冲洗图形队列并重生成
+                doc.TransactionManager.QueueForGraphicsFlush();
+                doc.Editor.Regen();
             }
         }
 
         /// <summary>
-        /// 局部刷新单层：删除该层旧填充并重新填充，随后修正层级。
+        /// 局部刷新单层：解决比例修改不生效的核心入口。
         /// </summary>
         public static void RefreshSingleLayer(MaterialItem item, IEnumerable<MaterialItem> allItems)
         {
@@ -71,16 +66,10 @@ namespace StyleMaster.Services
                 {
                     var btr = (BlockTableRecord)tr.GetObject(doc.Database.CurrentSpaceId, OpenMode.ForWrite);
 
-                    foreach (ObjectId id in btr)
-                    {
-                        var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                        if (ent is Hatch hatch && hatch.Layer.Equals(item.LayerName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            tr.GetObject(id, OpenMode.ForWrite);
-                            ent.Erase();
-                        }
-                    }
+                    // 清理单层
+                    ClearInternal(tr, btr, new List<string> { item.LayerName });
 
+                    // 生成新填充
                     var boundaryIds = GetEntitiesOnLayer(btr, tr, item.LayerName);
                     foreach (ObjectId bId in boundaryIds)
                     {
@@ -91,12 +80,15 @@ namespace StyleMaster.Services
                     ReorderDrawOrder(tr, btr, allItems);
                     tr.Commit();
                 }
-                doc.Editor.UpdateScreen();
+
+                // ✨ 深度重绘逻辑
+                doc.TransactionManager.QueueForGraphicsFlush();
+                doc.Editor.Regen();
             }
         }
 
         /// <summary>
-        /// ✨ 修复：补充缺失的清除图层填充方法
+        /// 清理指定图层的填充。
         /// </summary>
         public static void ClearFillsOnLayers(IEnumerable<string> layerNames)
         {
@@ -108,22 +100,23 @@ namespace StyleMaster.Services
                 using (var tr = doc.Database.TransactionManager.StartTransaction())
                 {
                     var btr = (BlockTableRecord)tr.GetObject(doc.Database.CurrentSpaceId, OpenMode.ForWrite);
-                    int count = 0;
-
-                    foreach (ObjectId id in btr)
-                    {
-                        var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                        if (ent is Hatch hatch && layerNames.Any(l => l.Equals(hatch.Layer, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            tr.GetObject(id, OpenMode.ForWrite);
-                            ent.Erase();
-                            count++;
-                        }
-                    }
+                    ClearInternal(tr, btr, layerNames.ToList());
                     tr.Commit();
-                    doc.Editor.WriteMessage($"\n[StyleMaster] 已成功清理 {count} 个填充对象。");
                 }
-                doc.Editor.UpdateScreen();
+                doc.Editor.Regen();
+            }
+        }
+
+        private static void ClearInternal(Transaction tr, BlockTableRecord btr, List<string> layers)
+        {
+            foreach (ObjectId id in btr)
+            {
+                var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                if (ent is Hatch hatch && layers.Any(n => n.Equals(hatch.Layer, StringComparison.OrdinalIgnoreCase)))
+                {
+                    tr.GetObject(id, OpenMode.ForWrite);
+                    ent.Erase();
+                }
             }
         }
 
@@ -132,16 +125,31 @@ namespace StyleMaster.Services
             Hatch hat = new Hatch();
             hat.SetDatabaseDefaults();
             hat.Layer = settings.LayerName;
+
             btr.AppendEntity(hat);
             tr.AddNewlyCreatedDBObject(hat, true);
 
+            hat.Associative = true;
             hat.Normal = Autodesk.AutoCAD.Geometry.Vector3d.ZAxis;
             hat.Color = settings.CadColor;
+
+            // ✨ 核心修复步骤：
+            // 1. 设置图案类型和名称
             hat.SetHatchPattern(HatchPatternType.PreDefined, settings.PatternName);
+
+            // 2. 设置比例数值
             hat.PatternScale = settings.Scale;
+
+            // 3. 【关键魔术】再次设置一遍图案！
+            // 这一步会强制 Hatch 引擎根据上面刚设好的 PatternScale 重新计算图案线
+            hat.SetHatchPattern(hat.PatternType, hat.PatternName);
+
             hat.Transparency = new Transparency((byte)(255 * (1 - settings.Opacity / 100.0)));
             hat.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundaryId });
+
+            // 4. 评估并记录图形修改
             hat.EvaluateHatch(true);
+            hat.RecordGraphicsModified(true);
         }
 
         private static void ReorderDrawOrder(Transaction tr, BlockTableRecord btr, IEnumerable<MaterialItem> items)
