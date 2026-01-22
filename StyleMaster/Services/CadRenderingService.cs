@@ -89,54 +89,76 @@ namespace StyleMaster.Services
         // 核心图片填充：带每步调试
         private static void CreateImageFill(Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings, Editor ed)
         {
-            // 1. 基础路径检查
-            string assemblyDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            string imagePath = Path.Combine(assemblyDir, "Resources", "Materials", settings.PatternName);
-            if (!File.Exists(imagePath)) return;
-
-            // 2. 确保图片定义存在 (ImageDef)
-            ObjectId imageDefId = GetOrCreateImageDef(btr.Database, tr, imagePath);
-            if (imageDefId.IsNull) return;
-
-            // 3. 获取边界
-            var pline = tr.GetObject(boundaryId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-            if (pline == null) return;
-            Extents3d ext = pline.GeometricExtents;
-
-            // 4. 创建图片实体
-            RasterImage image = new RasterImage();
-            image.SetDatabaseDefaults();
-            image.ImageDefId = imageDefId;
-            image.Layer = settings.LayerName;
-
-            double w = ext.MaxPoint.X - ext.MinPoint.X;
-            double h = ext.MaxPoint.Y - ext.MinPoint.Y;
-            image.Orientation = new CoordinateSystem3d(ext.MinPoint, new Vector3d(w, 0, 0), new Vector3d(0, h, 0));
-            image.ImageTransparency = true;
-
-            // 将图片添加到数据库
-            ObjectId imageId = btr.AppendEntity(image);
-            tr.AddNewlyCreatedDBObject(image, true);
-
-            // ✨ 核心修复：只记录句柄，不在这里执行命令
-            string imgH = imageId.Handle.ToString();
+            // 定义一个局部变量保存句柄，避免跨线程引用实体
+            string imgH = string.Empty;
             string plH = boundaryId.Handle.ToString();
 
-            // 构建一段纯净的 LISP 脚本
-            // 使用 vl-catch-all-apply 确保即使一个填充失败，也不会弹出报错对话框
-            string lispCmd = string.Format(
-                "(vl-catch-all-apply '(lambda () " +
+            try
+            {
+                // 1. 基础路径与图片定义检查
+                string assemblyDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                string imagePath = Path.Combine(assemblyDir, "Resources", "Materials", settings.PatternName);
+                if (!File.Exists(imagePath)) return;
+
+                ObjectId imageDefId = GetOrCreateImageDef(btr.Database, tr, imagePath);
+                if (imageDefId.IsNull) return;
+
+                // 2. 获取多段线范围 (在事务内完成计算)
+                var pline = tr.GetObject(boundaryId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                if (pline == null) return;
+                Extents3d ext = pline.GeometricExtents;
+
+                // 3. 获取图片原始像素并计算比例尺寸
+                RasterImageDef imgDef = (RasterImageDef)tr.GetObject(imageDefId, OpenMode.ForRead);
+                Vector2d imgSize = imgDef.Size;
+
+                // 使用界面上的 Scale 属性计算显示尺寸
+                double displayWidth = imgSize.X * settings.Scale;
+                double displayHeight = imgSize.Y * settings.Scale;
+
+                // 4. 创建图片实体
+                RasterImage image = new RasterImage();
+                image.SetDatabaseDefaults();
+                image.ImageDefId = imageDefId;
+                image.Layer = settings.LayerName;
+
+                // 设置定位和比例
+                image.Orientation = new CoordinateSystem3d(
+                    ext.MinPoint,
+                    new Vector3d(displayWidth, 0, 0),
+                    new Vector3d(0, displayHeight, 0)
+                );
+                image.ImageTransparency = true;
+
+                // 5. 将实体加入数据库并记录句柄
+                ObjectId imageId = btr.AppendEntity(image);
+                tr.AddNewlyCreatedDBObject(image, true);
+                imgH = imageId.Handle.ToString();
+
+                // ✨ 关键修复点 1：在这里结束所有托管对象的使用
+                // 不要在这里调用 ed.Command 或 SendString
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\n[异常] 填充前期准备失败: {ex.Message}");
+                return;
+            }
+
+            // ✨ 关键修复点 2：利用 SendStringToExecute 的异步特性
+            // 构造 LISP 字符串，注意 (handent) 是通过字符串句柄重新在 CAD 底层查找对象
+            // 这种方式不会涉及 C# 的内存指针，因此最安全
+            string lispCode = string.Format(
+                "(progn " +
                 "  (setvar \"CMDECHO\" 0) " +
-                "  (command \"_.IMAGECLIP\" (handent \"{0}\") \"_N\" \"_S\" (handent \"{1}\")) " +
                 "  (setvar \"IMAGEFRAME\" 0) " +
-                "))(princ) ",
+                "  (vl-catch-all-apply '(lambda () (command \"_.IMAGECLIP\" (handent \"{0}\") \"_N\" \"_S\" (handent \"{1}\")))) " +
+                "  (princ) " +
+                ") ",
                 imgH, plH
             );
 
-            // ✨ 核心修复：通过异步队列发送
-            // 注意：不要在之后访问 'image' 对象的任何属性，因为它可能已被事务回收
-            Document doc = Application.DocumentManager.MdiActiveDocument;
-            doc.SendStringToExecute(lispCmd, true, false, false);
+            // 将执行权完全交给 AutoCAD 的主命令环
+            Application.DocumentManager.MdiActiveDocument.SendStringToExecute(lispCode, true, false, false);
         }
 
         // ✨ 辅助函数：计算多边形面积以判断方向
