@@ -177,7 +177,7 @@ namespace StyleMaster.Services
                         {
                             if (!item.IsFillLayer) continue;
                             var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
-                            svg.AppendLine($"  <g id=\"{item.LayerName}\" data-pattern=\"{item.PatternName}\">");
+                            svg.AppendLine($"  <g id=\"{item.LayerName}\" data-pattern=\"{item.PatternName}\" fill=\"none\" stroke=\"black\" stroke-width=\"0.1\">");
                             foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in ids)
                             {
                                 if (tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is Autodesk.AutoCAD.DatabaseServices.Polyline pl)

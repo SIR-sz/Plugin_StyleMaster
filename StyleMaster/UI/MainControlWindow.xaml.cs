@@ -39,16 +39,18 @@ namespace StyleMaster.UI
         {
             InitializeComponent();
 
-            // 初始化集合，此时不包含任何预设测试项
             MaterialItems = new ObservableCollection<MaterialItem>();
+
+            // ✨ 修改 1：在初始化集合后，立即注册监听器
+            RegisterLayerPropertyTracker();
+
             InitializeTestData();
 
-            // 设置 DataContext 方便 XAML 进行数据绑定
             this.DataContext = this;
             this.MainDataGrid.ItemsSource = MaterialItems;
         }
         /// <summary>
-        /// 为集合中的项绑定属性更改监听，实现即时冻结
+        /// 注册属性追踪逻辑（请确保在构造函数内初始化 MaterialItems 后调用）
         /// </summary>
         private void RegisterLayerPropertyTracker()
         {
@@ -58,31 +60,31 @@ namespace StyleMaster.UI
                 {
                     foreach (StyleMaster.Models.MaterialItem item in e.NewItems)
                     {
+                        item.PropertyChanged -= Item_PropertyChanged;
                         item.PropertyChanged += Item_PropertyChanged;
                     }
                 }
             };
 
-            // 对现有项进行绑定
             foreach (var item in MaterialItems)
             {
+                item.PropertyChanged -= Item_PropertyChanged;
                 item.PropertyChanged += Item_PropertyChanged;
             }
         }
 
         /// <summary>
         /// 监听模型属性改变：当 IsFrozen 改变时立即同步 CAD。
-        /// 请在初始化 MaterialItems 集合后调用此方法的注册。
         /// </summary>
         private void Item_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
             if (e.PropertyName == "IsFrozen")
             {
                 var item = sender as StyleMaster.Models.MaterialItem;
-                if (item == null) return;
-
-                // 立即同步到 CAD
-                SyncSingleLayerFrozenState(item);
+                if (item != null)
+                {
+                    SyncSingleLayerFrozenState(item);
+                }
             }
         }
 
@@ -103,27 +105,27 @@ namespace StyleMaster.UI
                 {
                     try
                     {
-                        var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
-
+                        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
                         if (lt.Has(item.LayerName))
                         {
-                            var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[item.LayerName], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+                            var ltr = (LayerTableRecord)tr.GetObject(lt[item.LayerName], OpenMode.ForWrite);
 
-                            // ✨ 核心保护逻辑：如果试图冻结当前层
+                            // 保护逻辑：如果是当前层，禁止冻结
                             if (item.IsFrozen && db.Clayer == ltr.ObjectId)
                             {
-                                // 1. 弹出警告提示（非报错，不中断程序）
                                 ed.WriteMessage($"\n[StyleMaster] 无法冻结图层 \"{item.LayerName}\"，因为它是当前工作图层。");
 
-                                // 2. 将模型状态改回 false (UI 勾选会自动取消)
-                                // 注意：为了避免循环触发 PropertyChanged，这里可以临时解绑或直接判断
+                                // 临时解除监听防止死循环，回滚 UI 状态
+                                item.PropertyChanged -= Item_PropertyChanged;
                                 item.IsFrozen = false;
+                                item.PropertyChanged += Item_PropertyChanged;
                             }
                             else
                             {
-                                // 执行冻结/解冻
-                                ltr.IsFrozen = item.IsFrozen;
-                                ed.WriteMessage($"\n[StyleMaster] 图层 \"{item.LayerName}\" 已{(item.IsFrozen ? "冻结" : "解冻")}。");
+                                if (ltr.IsFrozen != item.IsFrozen)
+                                {
+                                    ltr.IsFrozen = item.IsFrozen;
+                                }
                             }
                         }
                         tr.Commit();
@@ -133,7 +135,7 @@ namespace StyleMaster.UI
                         ed.WriteMessage($"\n[错误] 图层操作异常: {ex.Message}");
                     }
                 }
-                ed.Regen(); // 刷新屏幕显示
+                ed.Regen();
             }
         }
 

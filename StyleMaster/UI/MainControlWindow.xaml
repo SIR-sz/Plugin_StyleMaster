@@ -232,9 +232,15 @@
 
                         <DataGridTextColumn Header="比例" Binding="{Binding Scale}" Width="60"/>
 
-                        <DataGridCheckBoxColumn Header="冻结" 
-                        Binding="{Binding IsFrozen, UpdateSourceTrigger=PropertyChanged}" 
-                        Width="50"/>
+                        <DataGridTemplateColumn Header="冻结" Width="50">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding IsFrozen, UpdateSourceTrigger=PropertyChanged}" 
+                      HorizontalAlignment="Center" 
+                      VerticalAlignment="Center"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
 
                         <DataGridTemplateColumn Header="操作" Width="80">
                             <DataGridTemplateColumn.CellTemplate>
