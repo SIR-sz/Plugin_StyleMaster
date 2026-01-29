@@ -366,7 +366,7 @@ namespace StyleMaster.UI
                 {
                     LayerName = layerName,
                     Priority = MaterialItems.Count + 1,
-                    FillMode = FillType.Hatch, // 固定为 Hatch 模式
+                    FillType = "Hatch", // 固定为 Hatch 模式
                     PatternName = "SOLID",     // 默认为纯色填充
                     Opacity = 0,
                     CadColor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256)
@@ -386,25 +386,32 @@ namespace StyleMaster.UI
             MessageBox.Show("智能匹配功能正在开发中...");
         }
 
-        /// <summary>
-        /// 一键填充按钮点击事件：调用渲染服务，根据当前列表配置在 CAD 内绘制所有 Hatch。
-        /// </summary>
-        private void RunFill_Click(object sender, RoutedEventArgs e)
+        private void RunFill_Click(object sender, System.Windows.RoutedEventArgs e)
         {
-            if (MaterialItems == null || MaterialItems.Count == 0)
+            if (MaterialItems == null || MaterialItems.Count == 0) return;
+
+            // 过滤出仅勾选了 IsFillLayer 的项
+            var selectedItems = System.Linq.Enumerable.ToList(
+                System.Linq.Enumerable.Where(MaterialItems, x => x.IsFillLayer)
+            );
+
+            if (selectedItems.Count == 0)
             {
-                MessageBox.Show("列表为空，请先拾取图层。");
+                System.Windows.MessageBox.Show("请至少勾选一个需要填充的图层。");
                 return;
             }
 
             try
             {
-                // 调用简化后的渲染服务，执行轻量化的 Hatch 填充
-                Services.CadRenderingService.ExecuteFill(MaterialItems);
+                // ✨ 请将 RunBatchHatch 替换为你 Service 中实际存在的方法名
+                // 如果你的方法名是 RunFill，则改为：
+                StyleMaster.Services.CadRenderingService.RunFill(selectedItems);
+
+                Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage("\n[StyleMaster] 已完成勾选图层的内部填充预览。");
             }
             catch (System.Exception ex)
             {
-                MessageBox.Show("填充失败: " + ex.Message);
+                System.Windows.MessageBox.Show($"预览填充失败: {ex.Message}");
             }
         }
 
@@ -513,28 +520,68 @@ namespace StyleMaster.UI
             }
         }
         /// <summary>
-        /// 响应“导出 PS 适配 (SVG)”按钮点击，弹出保存对话框并调用渲染服务执行导出。
+        /// 导出按钮点击事件：同步导出 SVG，异步导出 PDF，并输出坐标兜底。
+        /// 修改：改为 async 方法，增加了 Task.Run 异步处理打印逻辑。
         /// </summary>
-        private void ExportSvg_Click(object sender, RoutedEventArgs e)
+        private async void ExportSvg_Click(object sender, System.Windows.RoutedEventArgs e)
         {
             if (MaterialItems == null || MaterialItems.Count == 0)
             {
-                MessageBox.Show("当前没有可导出的图层数据。");
+                System.Windows.MessageBox.Show("当前没有可导出的图层数据。");
                 return;
             }
 
-            // 使用 Microsoft.Win32.SaveFileDialog
-            SaveFileDialog saveFileDialog = new SaveFileDialog
+            Microsoft.Win32.SaveFileDialog saveFileDialog = new Microsoft.Win32.SaveFileDialog
             {
                 Filter = "SVG 文件 (*.svg)|*.svg",
-                FileName = "CAD_Export_For_PS.svg",
+                FileName = "StyleMaster_Export",
                 Title = "导出 PS 适配文件"
             };
 
             if (saveFileDialog.ShowDialog() == true)
             {
-                // 调用 Service 层的导出逻辑，将图层名与 PatternName 导出至 SVG 供 PS 脚本识别
-                CadRenderingService.ExportToSvg(MaterialItems, saveFileDialog.FileName);
+                string svgPath = saveFileDialog.FileName;
+                string pdfPath = svgPath.Replace(".svg", ".pdf");
+
+                // 提取被勾选为“填充层”的图层名称列表
+                var fillLayerNames = System.Linq.Enumerable.ToList(
+                    System.Linq.Enumerable.Select(
+                        System.Linq.Enumerable.Where(MaterialItems, x => x.IsFillLayer),
+                        x => x.LayerName
+                    )
+                );
+
+                try
+                {
+                    // 1. 同步导出 SVG 并获取范围 (✨ 修改：接收返回的 Extents3d)
+                    Autodesk.AutoCAD.DatabaseServices.Extents3d ext = StyleMaster.Services.CadRenderingService.ExportToSvg(MaterialItems, svgPath);
+
+                    // 2. 命令行输出坐标 (✨ 修改：作为手动打印的兜底数据)
+                    var ed = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor;
+                    ed.WriteMessage("\n[StyleMaster] 导出范围已锁定，请记录坐标：");
+                    ed.WriteMessage($"\n >> Min (左下): {ext.MinPoint.X:F2}, {ext.MinPoint.Y:F2}");
+                    ed.WriteMessage($"\n >> Max (右上): {ext.MaxPoint.X:F2}, {ext.MaxPoint.Y:F2}");
+
+                    // 3. 异步执行 PDF 打印线稿层 (✨ 修改：使用 Task.Run 避免阻塞 UI)
+                    await System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try
+                        {
+                            StyleMaster.Services.CadRenderingService.PlotRepresentationPdf(ext, pdfPath, fillLayerNames);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            // 打印失败仅在命令行静默提示，不中断主程序
+                            Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage($"\n[警告] PDF 自动打印失败: {ex.Message}");
+                        }
+                    });
+
+                    System.Windows.MessageBox.Show("SVG 导出成功！线稿 PDF 正在生成或请关注命令行提示。");
+                }
+                catch (System.Exception ex)
+                {
+                    System.Windows.MessageBox.Show($"导出过程发生错误: {ex.Message}");
+                }
             }
         }
     }
