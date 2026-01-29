@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace StyleMaster.Services
 {
@@ -89,76 +90,70 @@ namespace StyleMaster.Services
         // 核心图片填充：带每步调试
         private static void CreateImageFill(Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings, Editor ed)
         {
-            // 定义一个局部变量保存句柄，避免跨线程引用实体
-            string imgH = string.Empty;
-            string plH = boundaryId.Handle.ToString();
-
             try
             {
-                // 1. 基础路径与图片定义检查
+                // 1. 获取图片定义和基础尺寸
                 string assemblyDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
                 string imagePath = Path.Combine(assemblyDir, "Resources", "Materials", settings.PatternName);
                 if (!File.Exists(imagePath)) return;
 
                 ObjectId imageDefId = GetOrCreateImageDef(btr.Database, tr, imagePath);
-                if (imageDefId.IsNull) return;
-
-                // 2. 获取多段线范围 (在事务内完成计算)
-                var pline = tr.GetObject(boundaryId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-                if (pline == null) return;
-                Extents3d ext = pline.GeometricExtents;
-
-                // 3. 获取图片原始像素并计算比例尺寸
                 RasterImageDef imgDef = (RasterImageDef)tr.GetObject(imageDefId, OpenMode.ForRead);
                 Vector2d imgSize = imgDef.Size;
 
-                // 使用界面上的 Scale 属性计算显示尺寸
-                double displayWidth = imgSize.X * settings.Scale;
-                double displayHeight = imgSize.Y * settings.Scale;
+                // 计算单张瓦片的显示尺寸
+                double tileW = imgSize.X * settings.Scale;
+                double tileH = imgSize.Y * settings.Scale;
 
-                // 4. 创建图片实体
-                RasterImage image = new RasterImage();
-                image.SetDatabaseDefaults();
-                image.ImageDefId = imageDefId;
-                image.Layer = settings.LayerName;
+                // 2. 获取边界范围
+                var pline = tr.GetObject(boundaryId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                Extents3d ext = pline.GeometricExtents;
 
-                // 设置定位和比例
-                image.Orientation = new CoordinateSystem3d(
-                    ext.MinPoint,
-                    new Vector3d(displayWidth, 0, 0),
-                    new Vector3d(0, displayHeight, 0)
-                );
-                image.ImageTransparency = true;
+                // 3. 计算平铺矩阵
+                // 从包围盒左下角稍微偏移开始，确保覆盖全范围
+                double startX = ext.MinPoint.X;
+                double startY = ext.MinPoint.Y;
 
-                // 5. 将实体加入数据库并记录句柄
-                ObjectId imageId = btr.AppendEntity(image);
-                tr.AddNewlyCreatedDBObject(image, true);
-                imgH = imageId.Handle.ToString();
+                List<string> imageHandles = new List<string>();
 
-                // ✨ 关键修复点 1：在这里结束所有托管对象的使用
-                // 不要在这里调用 ed.Command 或 SendString
+                for (double x = startX; x < ext.MaxPoint.X; x += tileW)
+                {
+                    for (double y = startY; y < ext.MaxPoint.Y; y += tileH)
+                    {
+                        RasterImage image = new RasterImage();
+                        image.SetDatabaseDefaults();
+                        image.ImageDefId = imageDefId;
+                        image.Layer = settings.LayerName;
+
+                        // 设置当前瓦片的位置
+                        image.Orientation = new CoordinateSystem3d(
+                            new Point3d(x, y, 0),
+                            new Vector3d(tileW, 0, 0),
+                            new Vector3d(0, tileH, 0)
+                        );
+                        image.ImageTransparency = true;
+
+                        ObjectId id = btr.AppendEntity(image);
+                        tr.AddNewlyCreatedDBObject(image, true);
+                        imageHandles.Add(id.Handle.ToString());
+                    }
+                }
+
+                // 4. 批量执行 LISP 裁切（优化点：一次性发送所有瓦片的裁切指令）
+                string plH = boundaryId.Handle.ToString();
+                StringBuilder lispBatch = new StringBuilder("(progn (setvar \"CMDECHO\" 0) (setvar \"IMAGEFRAME\" 0) ");
+                foreach (var imgH in imageHandles)
+                {
+                    lispBatch.AppendFormat("(vl-catch-all-apply '(lambda () (command \"_.IMAGECLIP\" (handent \"{0}\") \"_N\" \"_S\" (handent \"{1}\")))) ", imgH, plH);
+                }
+                lispBatch.Append("(princ)) ");
+
+                Application.DocumentManager.MdiActiveDocument.SendStringToExecute(lispBatch.ToString(), true, false, false);
             }
             catch (System.Exception ex)
             {
-                ed.WriteMessage($"\n[异常] 填充前期准备失败: {ex.Message}");
-                return;
+                ed.WriteMessage($"\n[错误] 平铺填充失败: {ex.Message}");
             }
-
-            // ✨ 关键修复点 2：利用 SendStringToExecute 的异步特性
-            // 构造 LISP 字符串，注意 (handent) 是通过字符串句柄重新在 CAD 底层查找对象
-            // 这种方式不会涉及 C# 的内存指针，因此最安全
-            string lispCode = string.Format(
-                "(progn " +
-                "  (setvar \"CMDECHO\" 0) " +
-                "  (setvar \"IMAGEFRAME\" 0) " +
-                "  (vl-catch-all-apply '(lambda () (command \"_.IMAGECLIP\" (handent \"{0}\") \"_N\" \"_S\" (handent \"{1}\")))) " +
-                "  (princ) " +
-                ") ",
-                imgH, plH
-            );
-
-            // 将执行权完全交给 AutoCAD 的主命令环
-            Application.DocumentManager.MdiActiveDocument.SendStringToExecute(lispCode, true, false, false);
         }
 
         // ✨ 辅助函数：计算多边形面积以判断方向
