@@ -524,5 +524,19 @@ namespace StyleMaster.UI
                 System.Windows.MessageBox.Show($"刷新图层 {item.LayerName} 失败: {ex.Message}");
             }
         }
+        private void ExportSvg_Click(object sender, RoutedEventArgs e)
+        {
+            var saveFileDialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "SVG 文件 (*.svg)|*.svg",
+                FileName = "StyleMaster_Export.svg"
+            };
+
+            if (saveFileDialog.ShowDialog() == true)
+            {
+                // 调用 Service 层（需要你在 CadRenderingService 中新增该方法）
+                // CadRenderingService.ExportToSvg(this.MaterialList, saveFileDialog.FileName);
+            }
+        }
     }
 }

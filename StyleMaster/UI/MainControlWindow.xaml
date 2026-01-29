@@ -116,6 +116,7 @@
                 <Separator Margin="10,10" Background="{StaticResource BorderBrush}"/>
                 <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}" Click="RunFill_Click"/>
                 <Button Style="{StaticResource ModernBtn}" Content="清除填充" Margin="5,0" Click="ClearFills_Click"/>
+                <Button Content="导出 PS 适配 (SVG)" Click="ExportSvg_Click" Margin="5"/>
             </StackPanel>
 
             <Grid Grid.Row="2">

@@ -10,11 +10,64 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 
 namespace StyleMaster.Services
 {
     public static class CadRenderingService
     {
+        public static void ExportToSvg(IEnumerable<MaterialItem> items, string savePath)
+        {
+            var doc = Application.DocumentManager.MdiActiveDocument;
+            var db = doc.Database;
+
+            // 1. 计算全量包围盒，用于设置 SVG 的 viewBox
+            Extents3d totalExt = new Extents3d();
+            // (此处省略遍历所有边界获取总范围的逻辑，假设已获得 totalExt)
+
+            XNamespace ns = "http://www.w3.org/2000/svg";
+            XElement svgRoot = new XElement(ns + "svg",
+                new XAttribute("viewBox", $"{totalExt.MinPoint.X} {-totalExt.MaxPoint.Y} {totalExt.MaxPoint.X - totalExt.MinPoint.X} {totalExt.MaxPoint.Y - totalExt.MinPoint.Y}"),
+                new XAttribute("xmlns", ns.NamespaceName)
+            );
+
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForRead);
+
+                foreach (var item in items)
+                {
+                    // 为每个 CAD 图层创建一个 SVG 组 <g>
+                    XElement gLayer = new XElement(ns + "g", new XAttribute("id", item.LayerName));
+
+                    var boundaryIds = GetEntitiesOnLayer(btr, tr, item.LayerName);
+                    foreach (ObjectId bId in boundaryIds)
+                    {
+                        var pline = tr.GetObject(bId, OpenMode.ForRead) as Polyline;
+                        if (pline == null) continue;
+
+                        // 将 Polyline 转换为 SVG 的 path data (d 属性)
+                        string d = "M ";
+                        for (int i = 0; i < pline.NumberOfVertices; i++)
+                        {
+                            Point2d pt = pline.GetPoint2dAt(i);
+                            // 注意：CAD Y轴向上，SVG Y轴向下，通常需要取反
+                            d += $"{pt.X},{-pt.Y} ";
+                        }
+                        d += "Z";
+
+                        gLayer.Add(new XElement(ns + "path",
+                            new XAttribute("d", d),
+                            new XAttribute("fill", "none"),
+                            new XAttribute("stroke", "black")));
+                    }
+                    svgRoot.Add(gLayer);
+                }
+                tr.Commit();
+            }
+
+            svgRoot.Save(savePath);
+        }
         public static void ExecuteFill(IEnumerable<MaterialItem> items)
         {
             var doc = Application.DocumentManager.MdiActiveDocument;
