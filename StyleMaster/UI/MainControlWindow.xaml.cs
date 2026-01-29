@@ -47,7 +47,122 @@ namespace StyleMaster.UI
             this.DataContext = this;
             this.MainDataGrid.ItemsSource = MaterialItems;
         }
+        /// <summary>
+        /// 为集合中的项绑定属性更改监听，实现即时冻结
+        /// </summary>
+        private void RegisterLayerPropertyTracker()
+        {
+            MaterialItems.CollectionChanged += (s, e) =>
+            {
+                if (e.NewItems != null)
+                {
+                    foreach (StyleMaster.Models.MaterialItem item in e.NewItems)
+                    {
+                        item.PropertyChanged += Item_PropertyChanged;
+                    }
+                }
+            };
 
+            // 对现有项进行绑定
+            foreach (var item in MaterialItems)
+            {
+                item.PropertyChanged += Item_PropertyChanged;
+            }
+        }
+
+        /// <summary>
+        /// 监听模型属性改变：当 IsFrozen 改变时立即同步 CAD。
+        /// 请在初始化 MaterialItems 集合后调用此方法的注册。
+        /// </summary>
+        private void Item_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "IsFrozen")
+            {
+                var item = sender as StyleMaster.Models.MaterialItem;
+                if (item == null) return;
+
+                // 立即同步到 CAD
+                SyncSingleLayerFrozenState(item);
+            }
+        }
+
+        /// <summary>
+        /// 同步单个图层的冻结状态，并处理“当前层”保护逻辑。
+        /// </summary>
+        private void SyncSingleLayerFrozenState(StyleMaster.Models.MaterialItem item)
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+
+            var db = doc.Database;
+            var ed = doc.Editor;
+
+            using (doc.LockDocument())
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    try
+                    {
+                        var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
+
+                        if (lt.Has(item.LayerName))
+                        {
+                            var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[item.LayerName], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+
+                            // ✨ 核心保护逻辑：如果试图冻结当前层
+                            if (item.IsFrozen && db.Clayer == ltr.ObjectId)
+                            {
+                                // 1. 弹出警告提示（非报错，不中断程序）
+                                ed.WriteMessage($"\n[StyleMaster] 无法冻结图层 \"{item.LayerName}\"，因为它是当前工作图层。");
+
+                                // 2. 将模型状态改回 false (UI 勾选会自动取消)
+                                // 注意：为了避免循环触发 PropertyChanged，这里可以临时解绑或直接判断
+                                item.IsFrozen = false;
+                            }
+                            else
+                            {
+                                // 执行冻结/解冻
+                                ltr.IsFrozen = item.IsFrozen;
+                                ed.WriteMessage($"\n[StyleMaster] 图层 \"{item.LayerName}\" 已{(item.IsFrozen ? "冻结" : "解冻")}。");
+                            }
+                        }
+                        tr.Commit();
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\n[错误] 图层操作异常: {ex.Message}");
+                    }
+                }
+                ed.Regen(); // 刷新屏幕显示
+            }
+        }
+
+        /// <summary>
+        /// 同步单个图层的冻结状态到 CAD
+        /// </summary>
+        private void SyncSingleLayerFrozenState(string layerName, bool isFrozen)
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+
+            var db = doc.Database;
+            using (doc.LockDocument())
+            {
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
+                    if (lt.Has(layerName))
+                    {
+                        var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[layerName], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+
+                        // 执行冻结或解冻
+                        ltr.IsFrozen = isFrozen;
+                    }
+                    tr.Commit();
+                }
+                doc.Editor.Regen(); // 刷新屏幕显示
+            }
+        }
         /// <summary>
         /// 按照指南规范提供的静态启动方法
         /// 处理单例显示逻辑
@@ -132,7 +247,9 @@ namespace StyleMaster.UI
         {
             foreach (var item in MaterialItems)
             {
-                item.PreviewBrush = ConvertCadColorToBrush(item.CadColor, item.LayerName);
+                // 先移除再添加，防止重复绑定监听
+                item.PropertyChanged -= Item_PropertyChanged;
+                item.PropertyChanged += Item_PropertyChanged;
             }
         }
         /// <summary>
@@ -362,13 +479,20 @@ namespace StyleMaster.UI
                 if (MaterialItems.Any(x => x.LayerName.Equals(layerName, StringComparison.OrdinalIgnoreCase)))
                     continue;
 
-                var newItem = new MaterialItem
+                var newItem = new StyleMaster.Models.MaterialItem
                 {
                     LayerName = layerName,
                     Priority = MaterialItems.Count + 1,
-                    FillType = "Hatch", // 固定为 Hatch 模式
-                    PatternName = "SOLID",     // 默认为纯色填充
-                    Opacity = 0,
+                    FillType = "Hatch",           // 固定为 Hatch 模式
+                    PatternName = "SOLID",        // 默认为纯色填充
+
+                    // ✨ 修改：移除了导致报错的 Opacity = 0
+
+                    // ✨ 新增：初始化新增的属性
+                    IsFillLayer = true,           // 默认开启材质填充
+                    IsFrozen = false,             // 默认不冻结图层
+                    Scale = 1.0,                  // 默认缩放比例
+
                     CadColor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256)
                 };
 
@@ -523,66 +647,60 @@ namespace StyleMaster.UI
         /// 导出按钮点击事件：同步导出 SVG，异步导出 PDF，并输出坐标兜底。
         /// 修改：改为 async 方法，增加了 Task.Run 异步处理打印逻辑。
         /// </summary>
-        private async void ExportSvg_Click(object sender, System.Windows.RoutedEventArgs e)
+        private void ExportSvg_Click(object sender, System.Windows.RoutedEventArgs e)
         {
-            if (MaterialItems == null || MaterialItems.Count == 0)
-            {
-                System.Windows.MessageBox.Show("当前没有可导出的图层数据。");
-                return;
-            }
+            if (MaterialItems == null || MaterialItems.Count == 0) return;
 
             Microsoft.Win32.SaveFileDialog saveFileDialog = new Microsoft.Win32.SaveFileDialog
             {
                 Filter = "SVG 文件 (*.svg)|*.svg",
-                FileName = "StyleMaster_Export",
-                Title = "导出 PS 适配文件"
+                FileName = "StyleMaster_Export"
             };
 
             if (saveFileDialog.ShowDialog() == true)
             {
-                string svgPath = saveFileDialog.FileName;
-                string pdfPath = svgPath.Replace(".svg", ".pdf");
-
-                // 提取被勾选为“填充层”的图层名称列表
-                var fillLayerNames = System.Linq.Enumerable.ToList(
-                    System.Linq.Enumerable.Select(
-                        System.Linq.Enumerable.Where(MaterialItems, x => x.IsFillLayer),
-                        x => x.LayerName
-                    )
-                );
-
                 try
                 {
-                    // 1. 同步导出 SVG 并获取范围 (✨ 修改：接收返回的 Extents3d)
-                    Autodesk.AutoCAD.DatabaseServices.Extents3d ext = StyleMaster.Services.CadRenderingService.ExportToSvg(MaterialItems, svgPath);
+                    // 1. 同步导出 SVG 并生成 DCFW 边界矩形
+                    Autodesk.AutoCAD.DatabaseServices.Extents3d ext = StyleMaster.Services.CadRenderingService.ExportToSvg(MaterialItems, saveFileDialog.FileName);
 
-                    // 2. 命令行输出坐标 (✨ 修改：作为手动打印的兜底数据)
+                    // 2. 命令行输出坐标 (关键：供手动打印使用)
                     var ed = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor;
-                    ed.WriteMessage("\n[StyleMaster] 导出范围已锁定，请记录坐标：");
-                    ed.WriteMessage($"\n >> Min (左下): {ext.MinPoint.X:F2}, {ext.MinPoint.Y:F2}");
-                    ed.WriteMessage($"\n >> Max (右上): {ext.MaxPoint.X:F2}, {ext.MaxPoint.Y:F2}");
+                    ed.WriteMessage("\n[StyleMaster] 导出范围已锁定 (DCFW 图层已生成)：");
+                    ed.WriteMessage($"\n >> 左下角 (Min): {ext.MinPoint.X:F2}, {ext.MinPoint.Y:F2}");
+                    ed.WriteMessage($"\n >> 右上角 (Max): {ext.MaxPoint.X:F2}, {ext.MaxPoint.Y:F2}");
+                    ed.WriteMessage("\n[提示] 材质选区已就绪。请手动使用 Window 窗口模式打印 PDF 线稿。");
 
-                    // 3. 异步执行 PDF 打印线稿层 (✨ 修改：使用 Task.Run 避免阻塞 UI)
-                    await System.Threading.Tasks.Task.Run(() =>
-                    {
-                        try
-                        {
-                            StyleMaster.Services.CadRenderingService.PlotRepresentationPdf(ext, pdfPath, fillLayerNames);
-                        }
-                        catch (System.Exception ex)
-                        {
-                            // 打印失败仅在命令行静默提示，不中断主程序
-                            Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage($"\n[警告] PDF 自动打印失败: {ex.Message}");
-                        }
-                    });
-
-                    System.Windows.MessageBox.Show("SVG 导出成功！线稿 PDF 正在生成或请关注命令行提示。");
+                    System.Windows.MessageBox.Show("SVG 导出成功！坐标范围已输出至命令行。");
                 }
                 catch (System.Exception ex)
                 {
-                    System.Windows.MessageBox.Show($"导出过程发生错误: {ex.Message}");
+                    System.Windows.MessageBox.Show($"导出失败: {ex.Message}");
                 }
             }
+        }
+        /// <summary>
+        /// 根据列表状态一键冻结/解冻 CAD 图层
+        /// </summary>
+        private void ApplyLayerStates_Click(object sender, System.Windows.RoutedEventArgs e)
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            var db = doc.Database;
+            using (doc.LockDocument())
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
+                foreach (var item in MaterialItems)
+                {
+                    if (lt.Has(item.LayerName))
+                    {
+                        var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[item.LayerName], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+                        ltr.IsFrozen = item.IsFrozen; // 应用冻结状态
+                    }
+                }
+                tr.Commit();
+            }
+            doc.Editor.Regen();
         }
     }
 }

@@ -103,7 +103,7 @@ namespace StyleMaster.Services
         /// 增强版 SVG 导出：计算范围、导出数据，并在 CAD 中生成非打印的 DCFW 边界框。
         /// 修改：增加了创建 DCFW 图层及绘制矩形框的逻辑。
         /// </summary>
-        public static Autodesk.AutoCAD.DatabaseServices.Extents3d ExportToSvg(IEnumerable<StyleMaster.Models.MaterialItem> items, string savePath)
+        public static Autodesk.AutoCAD.DatabaseServices.Extents3d ExportToSvg(System.Collections.Generic.IEnumerable<StyleMaster.Models.MaterialItem> items, string savePath)
         {
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (doc == null) return new Autodesk.AutoCAD.DatabaseServices.Extents3d();
@@ -120,10 +120,11 @@ namespace StyleMaster.Services
                     {
                         var btr = (Autodesk.AutoCAD.DatabaseServices.BlockTableRecord)tr.GetObject(db.CurrentSpaceId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
 
-                        // 1. 预遍历计算范围
+                        // 1. 计算包围盒
                         bool hasEnts = false;
                         foreach (var item in items)
                         {
+                            // 注意：此处调用您现有的 GetEntitiesOnLayer
                             var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
                             foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in ids)
                             {
@@ -137,27 +138,23 @@ namespace StyleMaster.Services
 
                         if (!hasEnts) return totalExt;
 
-                        // --- ✨ 新增：创建 DCFW 图层并生成边界矩形 ---
-                        string layerName = "DCFW";
-                        Autodesk.AutoCAD.DatabaseServices.LayerTable lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
-
+                        // 2. 生成 DCFW 边界矩形框 (不可打印图层)
+                        string dcfwLayer = "DCFW";
+                        var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
                         Autodesk.AutoCAD.DatabaseServices.ObjectId ltId;
-                        if (!lt.Has(layerName))
+
+                        if (!lt.Has(dcfwLayer))
                         {
-                            Autodesk.AutoCAD.DatabaseServices.LayerTableRecord ltr = new Autodesk.AutoCAD.DatabaseServices.LayerTableRecord();
-                            ltr.Name = layerName;
-                            ltr.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 4); // 青色
-                            ltr.IsPlottable = false; // ✨ 设置为不可打印
+                            var ltr = new Autodesk.AutoCAD.DatabaseServices.LayerTableRecord();
+                            ltr.Name = dcfwLayer;
+                            ltr.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 4);
+                            ltr.IsPlottable = false; // ✨ 核心：设置为不打印
                             ltId = lt.Add(ltr);
                             tr.AddNewlyCreatedDBObject(ltr, true);
                         }
-                        else
-                        {
-                            ltId = lt[layerName];
-                        }
+                        else { ltId = lt[dcfwLayer]; }
 
-                        // 在范围内生成矩形框
-                        using (Autodesk.AutoCAD.DatabaseServices.Polyline rect = new Autodesk.AutoCAD.DatabaseServices.Polyline(4))
+                        using (var rect = new Autodesk.AutoCAD.DatabaseServices.Polyline(4))
                         {
                             rect.AddVertexAt(0, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MinPoint.X, totalExt.MinPoint.Y), 0, 0, 0);
                             rect.AddVertexAt(1, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MaxPoint.X, totalExt.MinPoint.Y), 0, 0, 0);
@@ -165,54 +162,45 @@ namespace StyleMaster.Services
                             rect.AddVertexAt(3, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MinPoint.X, totalExt.MaxPoint.Y), 0, 0, 0);
                             rect.Closed = true;
                             rect.LayerId = ltId;
-
                             btr.AppendEntity(rect);
                             tr.AddNewlyCreatedDBObject(rect, true);
                         }
-                        // --- 边界框创建结束 ---
 
-                        // 2. 导出 SVG 数据 (逻辑保持不变)
+                        // 3. 导出 SVG 数据
                         double width = totalExt.MaxPoint.X - totalExt.MinPoint.X;
                         double height = totalExt.MaxPoint.Y - totalExt.MinPoint.Y;
-                        System.Text.StringBuilder svgContent = new System.Text.StringBuilder();
-                        svgContent.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-                        svgContent.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{totalExt.MinPoint.X} {-totalExt.MaxPoint.Y} {width} {height}\" data-width=\"{width:F2}\" data-height=\"{height:F2}\" data-minx=\"{totalExt.MinPoint.X:F2}\" data-miny=\"{totalExt.MinPoint.Y:F2}\">");
+                        System.Text.StringBuilder svg = new System.Text.StringBuilder();
+                        svg.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+                        svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{totalExt.MinPoint.X} {-totalExt.MaxPoint.Y} {width} {height}\" data-width=\"{width:F2}\" data-height=\"{height:F2}\" data-minx=\"{totalExt.MinPoint.X:F2}\" data-miny=\"{totalExt.MinPoint.Y:F2}\">");
 
                         foreach (var item in items)
                         {
-                            if (!item.IsFillLayer) continue; // 仅导出勾选了填充的层
-
+                            if (!item.IsFillLayer) continue;
                             var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
-                            if (ids.Count == 0) continue;
-                            svgContent.AppendLine($"  <g id=\"{item.LayerName}\" data-pattern=\"{item.PatternName}\">");
+                            svg.AppendLine($"  <g id=\"{item.LayerName}\" data-pattern=\"{item.PatternName}\">");
                             foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in ids)
                             {
                                 if (tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is Autodesk.AutoCAD.DatabaseServices.Polyline pl)
                                 {
-                                    svgContent.Append("    <path d=\"M ");
+                                    svg.Append("    <path d=\"M ");
                                     for (int i = 0; i < pl.NumberOfVertices; i++)
                                     {
                                         var pt = pl.GetPoint2dAt(i);
-                                        svgContent.Append($"{pt.X} {-pt.Y} ");
-                                        if (i < pl.NumberOfVertices - 1) svgContent.Append("L ");
+                                        svg.Append($"{pt.X} {-pt.Y} ");
+                                        if (i < pl.NumberOfVertices - 1) svg.Append("L ");
                                     }
-                                    svgContent.AppendLine("Z\" />");
+                                    svg.AppendLine("Z\" />");
                                 }
                             }
-                            svgContent.AppendLine("  </g>");
+                            svg.AppendLine("  </g>");
                         }
-                        svgContent.AppendLine("</svg>");
-                        System.IO.File.WriteAllText(savePath, svgContent.ToString());
-
+                        svg.AppendLine("</svg>");
+                        System.IO.File.WriteAllText(savePath, svg.ToString());
                         tr.Commit();
                     }
                 }
             }
-            catch (System.Exception ex)
-            {
-                ed.WriteMessage($"\n[错误] 导出失败: {ex.Message}");
-            }
-
+            catch (System.Exception ex) { ed.WriteMessage($"\n[错误] {ex.Message}"); }
             return totalExt;
         }
 
@@ -284,38 +272,58 @@ namespace StyleMaster.Services
         }
 
         /// <summary>
-        /// 创建 Hatch 实体。
+        /// 创建单个填充对象
+        /// 修改点：移除了 settings.Opacity 引用，增加了 DrawOrder 置顶逻辑
         /// </summary>
-        private static void CreateHatch(Transaction tr, BlockTableRecord btr, ObjectId boundaryId, MaterialItem settings, Editor ed)
+        private static void CreateHatch(Autodesk.AutoCAD.DatabaseServices.Transaction tr, Autodesk.AutoCAD.DatabaseServices.BlockTableRecord btr, Autodesk.AutoCAD.DatabaseServices.ObjectId boundaryId, StyleMaster.Models.MaterialItem settings, Autodesk.AutoCAD.EditorInput.Editor ed)
         {
             try
             {
                 string patternName = string.IsNullOrEmpty(settings.PatternName) ? "ANSI31" : settings.PatternName;
 
-                Hatch hat = new Hatch();
+                Autodesk.AutoCAD.DatabaseServices.Hatch hat = new Autodesk.AutoCAD.DatabaseServices.Hatch();
                 hat.SetDatabaseDefaults();
                 hat.Layer = settings.LayerName;
-                btr.AppendEntity(hat);
+
+                // 将填充添加到块表记录
+                Autodesk.AutoCAD.DatabaseServices.ObjectId hatId = btr.AppendEntity(hat);
                 tr.AddNewlyCreatedDBObject(hat, true);
 
                 hat.Associative = true;
-                hat.Normal = Vector3d.ZAxis;
-                hat.Color = settings.CadColor;
+                hat.Normal = Autodesk.AutoCAD.Geometry.Vector3d.ZAxis;
 
+                if (settings.CadColor != null)
+                {
+                    hat.Color = settings.CadColor;
+                }
+
+                // 设置图案与比例
                 try
                 {
-                    hat.SetHatchPattern(HatchPatternType.PreDefined, patternName);
+                    hat.SetHatchPattern(Autodesk.AutoCAD.DatabaseServices.HatchPatternType.PreDefined, patternName);
                     hat.PatternScale = settings.Scale > 0 ? settings.Scale : 1.0;
+                    // 重新设置以触发比例刷新
                     hat.SetHatchPattern(hat.PatternType, hat.PatternName);
                 }
                 catch
                 {
-                    hat.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                    // 如果图案名无效，降级使用 SOLID 填充
+                    hat.SetHatchPattern(Autodesk.AutoCAD.DatabaseServices.HatchPatternType.PreDefined, "SOLID");
                 }
 
-                hat.Transparency = new Transparency((byte)(255 * (1 - settings.Opacity / 100.0)));
-                hat.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundaryId });
+                // ✨ 修改：删除了之前导致报错的 hat.Transparency 设置行
+
+                // 添加边界循环并计算
+                Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection idsCol = new Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection { boundaryId };
+                hat.AppendLoop(Autodesk.AutoCAD.DatabaseServices.HatchLoopTypes.Outermost, idsCol);
                 hat.EvaluateHatch(true);
+
+                // ✨ 新增：强制设置绘图次序，确保新生成的对象在视觉最上方
+                using (var dot = (Autodesk.AutoCAD.DatabaseServices.DrawOrderTable)tr.GetObject(btr.DrawOrderTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite))
+                {
+                    Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection hIds = new Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection { hatId };
+                    dot.MoveToTop(hIds);
+                }
             }
             catch (System.Exception ex)
             {
@@ -398,6 +406,10 @@ namespace StyleMaster.Services
         /// 按层级数字从大到小（降序）执行批量填充预览。
         /// 逻辑：先填充数字大的图层，后填充数字小的图层。
         /// </summary>
+        /// <summary>
+        /// 按层级数字从大到小（降序）执行批量填充预览。
+        /// 修改：移除了对 Opacity 属性的引用。
+        /// </summary>
         public static void RunFill(System.Collections.Generic.IEnumerable<StyleMaster.Models.MaterialItem> items)
         {
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
@@ -411,13 +423,11 @@ namespace StyleMaster.Services
                 {
                     var btr = (Autodesk.AutoCAD.DatabaseServices.BlockTableRecord)tr.GetObject(db.CurrentSpaceId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
 
-                    // ✨ 核心修改：使用 OrderByDescending 实现降序排列
-                    // 顺序将变为：4, 3, 2, 1 ...
+                    // 按 Priority 降序排列 (4, 3, 2, 1)
                     var sortedItems = System.Linq.Enumerable.OrderByDescending(items, x => x.Priority);
 
                     foreach (var item in sortedItems)
                     {
-                        // 获取该图层上的边界 (调用您现有的 GetEntitiesOnLayer 方法)
                         var boundaryIds = GetEntitiesOnLayer(btr, tr, item.LayerName);
                         if (boundaryIds.Count == 0) continue;
 
@@ -425,25 +435,22 @@ namespace StyleMaster.Services
                         {
                             using (var hatch = new Autodesk.AutoCAD.DatabaseServices.Hatch())
                             {
-                                // 设置图案与属性
                                 hatch.SetHatchPattern(Autodesk.AutoCAD.DatabaseServices.HatchPatternType.PreDefined, item.PatternName);
                                 hatch.Layer = item.LayerName;
                                 if (item.CadColor != null) hatch.Color = item.CadColor;
 
-                                // 插入数据库
-                                Autodesk.AutoCAD.DatabaseServices.ObjectId hId = btr.AppendEntity(hatch);
+                                // ✨ 修改：删除了设置 hatch.Transparency 的逻辑
+
+                                btr.AppendEntity(hatch);
                                 tr.AddNewlyCreatedDBObject(hatch, true);
 
-                                // 关联边界
                                 var idsCol = new Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection { bId };
                                 hatch.AppendLoop(Autodesk.AutoCAD.DatabaseServices.HatchLoopTypes.Default, idsCol);
                                 hatch.EvaluateHatch(true);
 
-                                // ✨ 显式确保当前生成的填充位于最上方
-                                // 这样后生成的（数字小的图层）会压在先生成的（数字大的图层）上面
                                 using (var dot = (Autodesk.AutoCAD.DatabaseServices.DrawOrderTable)tr.GetObject(btr.DrawOrderTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite))
                                 {
-                                    var hCol = new Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection { hId };
+                                    var hCol = new Autodesk.AutoCAD.DatabaseServices.ObjectIdCollection { hatch.ObjectId };
                                     dot.MoveToTop(hCol);
                                 }
                             }
@@ -451,7 +458,6 @@ namespace StyleMaster.Services
                     }
                     tr.Commit();
                 }
-                // 强制刷新视图
                 ed.Regen();
             }
         }

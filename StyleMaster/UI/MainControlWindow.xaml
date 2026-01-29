@@ -232,7 +232,9 @@
 
                         <DataGridTextColumn Header="比例" Binding="{Binding Scale}" Width="60"/>
 
-                        <DataGridTextColumn Header="透明度" Binding="{Binding Opacity}" Width="60"/>
+                        <DataGridCheckBoxColumn Header="冻结" 
+                        Binding="{Binding IsFrozen, UpdateSourceTrigger=PropertyChanged}" 
+                        Width="50"/>
 
                         <DataGridTemplateColumn Header="操作" Width="80">
                             <DataGridTemplateColumn.CellTemplate>

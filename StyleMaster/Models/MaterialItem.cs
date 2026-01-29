@@ -4,20 +4,16 @@ using System.Windows.Media;
 
 namespace StyleMaster.Models
 {
-    /// <summary>
-    /// 图层材质模型类 - 最终修正版
-    /// 修复：统一私有变量为 _fillType，公开属性为 FillType，彻底解决 CS0103 错误。
-    /// </summary>
     public class MaterialItem : INotifyPropertyChanged
     {
         private string _layerName;
         private string _patternName;
         private bool _isFillLayer = true;
+        private bool _isFrozen = false; // ✨ 新增：冻结属性
         private Autodesk.AutoCAD.Colors.Color _cadColor;
         private double _scale = 1.0;
-        private int _opacity = 100;
         private int _priority = 0;
-        private string _fillType = "Hatch"; // 统一使用 _fillType
+        private string _fillType = "Hatch";
         private Brush _previewBrush = Brushes.Gray;
 
         public string LayerName
@@ -38,6 +34,21 @@ namespace StyleMaster.Models
             set { _isFillLayer = value; OnPropertyChanged(); }
         }
 
+        /// <summary>
+        /// 是否冻结图层
+        /// </summary>
+        public bool IsFrozen
+        {
+            get => _isFrozen;
+            set
+            {
+                if (_isFrozen != value)
+                {
+                    _isFrozen = value;
+                    OnPropertyChanged(); // ✨ 必须触发此通知，UI 勾选才会生效
+                }
+            }
+        }
         public Autodesk.AutoCAD.Colors.Color CadColor
         {
             get => _cadColor;
@@ -50,21 +61,12 @@ namespace StyleMaster.Models
             set { _scale = value; OnPropertyChanged(); }
         }
 
-        public int Opacity
-        {
-            get => _opacity;
-            set { _opacity = value; OnPropertyChanged(); }
-        }
-
         public int Priority
         {
             get => _priority;
             set { _priority = value; OnPropertyChanged(); }
         }
 
-        /// <summary>
-        /// 填充类型 (对应 UI 逻辑中的 FillType)
-        /// </summary>
         public string FillType
         {
             get => _fillType;
