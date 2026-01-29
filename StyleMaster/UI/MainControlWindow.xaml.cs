@@ -1,11 +1,15 @@
-﻿using Autodesk.AutoCAD.DatabaseServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
+using Microsoft.Win32; // <--- 修复 SaveFileDialog 错误的关键
 using StyleMaster.Models;
+using StyleMaster.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -327,7 +331,7 @@ namespace StyleMaster.UI
         }
 
         /// <summary>
-        /// 拾取图纸范围按钮点击事件：自动提取选中多段线的图层
+        /// 拾取图纸范围按钮点击事件：在 CAD 中选择实体，自动提取图层并初始化为 Hatch 模式。
         /// </summary>
         private void PickLayers_Click(object sender, RoutedEventArgs e)
         {
@@ -336,13 +340,12 @@ namespace StyleMaster.UI
 
             var ed = doc.Editor;
 
-            // 1. 让用户在 CAD 中选择对象
+            // 引导用户进行 CAD 选择
             var promptOptions = new PromptSelectionOptions { MessageForAdding = "\n请选择图纸范围内的对象以提取图层: " };
             var selectionResult = ed.GetSelection(promptOptions);
 
             if (selectionResult.Status != PromptStatus.OK) return;
 
-            // 2. 提取唯一的图层名集合
             var selectedLayerNames = new HashSet<string>();
             using (var tr = doc.Database.TransactionManager.StartTransaction())
             {
@@ -354,10 +357,8 @@ namespace StyleMaster.UI
                 }
             }
 
-            // 3. 将新图层添加进 MaterialItems 集合
             foreach (var layerName in selectedLayerNames)
             {
-                // 检查是否已经存在于列表中，避免重复添加
                 if (MaterialItems.Any(x => x.LayerName.Equals(layerName, StringComparison.OrdinalIgnoreCase)))
                     continue;
 
@@ -365,16 +366,14 @@ namespace StyleMaster.UI
                 {
                     LayerName = layerName,
                     Priority = MaterialItems.Count + 1,
-                    FillMode = FillType.Hatch,
-                    PatternName = "SOLID",
+                    FillMode = FillType.Hatch, // 固定为 Hatch 模式
+                    PatternName = "SOLID",     // 默认为纯色填充
                     Opacity = 0,
-                    // 默认颜色设置为：随层 (ByLayer)
                     CadColor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256)
                 };
 
-                // ✨ 关键点：在加入列表前，立即计算“随层”颜色并赋值给预览色块
+                // 计算图层对应的预览颜色
                 newItem.PreviewBrush = ConvertCadColorToBrush(newItem.CadColor, newItem.LayerName);
-
                 MaterialItems.Add(newItem);
             }
         }
@@ -388,7 +387,7 @@ namespace StyleMaster.UI
         }
 
         /// <summary>
-        /// 一键填充按钮点击事件
+        /// 一键填充按钮点击事件：调用渲染服务，根据当前列表配置在 CAD 内绘制所有 Hatch。
         /// </summary>
         private void RunFill_Click(object sender, RoutedEventArgs e)
         {
@@ -400,7 +399,7 @@ namespace StyleMaster.UI
 
             try
             {
-                // 调用渲染服务执行填充逻辑
+                // 调用简化后的渲染服务，执行轻量化的 Hatch 填充
                 Services.CadRenderingService.ExecuteFill(MaterialItems);
             }
             catch (System.Exception ex)
@@ -410,7 +409,8 @@ namespace StyleMaster.UI
         }
 
         /// <summary>
-        /// 材质选择按钮点击逻辑：针对 Hatch 模式弹出预览选择窗口
+        /// 材质选择按钮点击逻辑：弹出 Hatch 图案预览选择窗口。
+        /// 已移除原有的 OpenFileDialog 图片选择逻辑，仅支持矢量 Hatch 图案。
         /// </summary>
         private void SelectMaterial_Click(object sender, RoutedEventArgs e)
         {
@@ -418,29 +418,13 @@ namespace StyleMaster.UI
             var item = btn?.DataContext as MaterialItem;
             if (item == null) return;
 
-            if (item.FillMode == FillType.Hatch)
-            {
-                var selector = new PatternSelectorWindow();
-                selector.Owner = this;
+            // 统一使用 PatternSelectorWindow 进行 Hatch 图案选择
+            var selector = new PatternSelectorWindow();
+            selector.Owner = this;
 
-                if (selector.ShowDialog() == true)
-                {
-                    item.PatternName = selector.SelectedPatternName;
-                }
-            }
-            else
+            if (selector.ShowDialog() == true)
             {
-                var dialog = new Microsoft.Win32.OpenFileDialog
-                {
-                    Filter = "图片材质|*.png;*.jpg;*.jpeg;*.bmp",
-                    InitialDirectory = System.IO.Path.Combine(
-                        System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
-                        "Resources", "Materials")
-                };
-                if (dialog.ShowDialog() == true)
-                {
-                    item.PatternName = System.IO.Path.GetFileName(dialog.FileName);
-                }
+                item.PatternName = selector.SelectedPatternName;
             }
         }
 
@@ -504,12 +488,15 @@ namespace StyleMaster.UI
             }
         }
 
+        /// <summary>
+        /// 响应单行刷新按钮。
+        /// 强制提交 DataGrid 编辑以确保 Scale 等数值已更新，随后重新绘制该图层的 Hatch。
+        /// </summary>
         private void RefreshLayer_Click(object sender, RoutedEventArgs e)
         {
-            // ✨ 核心修复：强制 DataGrid 失去焦点并提交编辑
-            // 这样能确保 MaterialItems 中的 Scale 属性已经更新为用户输入的数字
+            // 强制提交编辑，确保 MaterialItems 中的 Scale 属性已更新
             MainDataGrid.CommitEdit(DataGridEditingUnit.Row, true);
-            MainDataGrid.Focus(); // 强制刷新 UI 焦点
+            MainDataGrid.Focus();
 
             var btn = sender as System.Windows.Controls.Button;
             var item = btn?.DataContext as MaterialItem;
@@ -517,6 +504,7 @@ namespace StyleMaster.UI
 
             try
             {
+                // 仅在 CAD 内执行 Hatch 填充刷新
                 Services.CadRenderingService.RefreshSingleLayer(item, MaterialItems);
             }
             catch (System.Exception ex)
@@ -524,18 +512,29 @@ namespace StyleMaster.UI
                 System.Windows.MessageBox.Show($"刷新图层 {item.LayerName} 失败: {ex.Message}");
             }
         }
+        /// <summary>
+        /// 响应“导出 PS 适配 (SVG)”按钮点击，弹出保存对话框并调用渲染服务执行导出。
+        /// </summary>
         private void ExportSvg_Click(object sender, RoutedEventArgs e)
         {
-            var saveFileDialog = new Microsoft.Win32.SaveFileDialog
+            if (MaterialItems == null || MaterialItems.Count == 0)
+            {
+                MessageBox.Show("当前没有可导出的图层数据。");
+                return;
+            }
+
+            // 使用 Microsoft.Win32.SaveFileDialog
+            SaveFileDialog saveFileDialog = new SaveFileDialog
             {
                 Filter = "SVG 文件 (*.svg)|*.svg",
-                FileName = "StyleMaster_Export.svg"
+                FileName = "CAD_Export_For_PS.svg",
+                Title = "导出 PS 适配文件"
             };
 
             if (saveFileDialog.ShowDialog() == true)
             {
-                // 调用 Service 层（需要你在 CadRenderingService 中新增该方法）
-                // CadRenderingService.ExportToSvg(this.MaterialList, saveFileDialog.FileName);
+                // 调用 Service 层的导出逻辑，将图层名与 PatternName 导出至 SVG 供 PS 脚本识别
+                CadRenderingService.ExportToSvg(MaterialItems, saveFileDialog.FileName);
             }
         }
     }

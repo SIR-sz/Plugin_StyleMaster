@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:Models="clr-namespace:StyleMaster.Models"
+        xmlns:Models="clr-namespace:StyleMaster.Models;assembly=StyleMaster"
         mc:Ignorable="d"
         Title="StyleMaster" Height="600" Width="850"
         WindowStyle="None" AllowsTransparency="True" 
@@ -24,9 +24,27 @@
             <Setter Property="Padding" Value="10,5"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="2">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#505050"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ModernBtn}">
+            <Setter Property="Background" Value="#4CAF50"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#45A049"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -114,9 +132,9 @@
                 <Button Style="{StaticResource ModernBtn}" Content="拾取图纸范围" Margin="5,0" Click="PickLayers_Click"/>
                 <Button Style="{StaticResource ModernBtn}" Content="智能匹配" Margin="5,0" Click="SmartMatch_Click"/>
                 <Separator Margin="10,10" Background="{StaticResource BorderBrush}"/>
-                <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}" Click="RunFill_Click"/>
+                <Button Style="{StaticResource ModernBtn}" Content="一键填充" Background="{StaticResource AccentBrush}" Click="RunFill_Click" Margin="5,0"/>
                 <Button Style="{StaticResource ModernBtn}" Content="清除填充" Margin="5,0" Click="ClearFills_Click"/>
-                <Button Content="导出 PS 适配 (SVG)" Click="ExportSvg_Click" Margin="5"/>
+                <Button Content="导出 PS 适配 (SVG)" Click="ExportSvg_Click" Style="{StaticResource ActionButtonStyle}" Margin="5,0"/>
             </StackPanel>
 
             <Grid Grid.Row="2">
@@ -164,19 +182,12 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
+
                         <DataGridTextColumn Header="层级" Binding="{Binding Priority}" Width="60" IsReadOnly="True"/>
+
                         <DataGridTextColumn Header="识别图层" Binding="{Binding LayerName}" Width="150" IsReadOnly="True"/>
-                        <DataGridTemplateColumn Header="填充模式" Width="100">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <ComboBox Style="{StaticResource DarkComboBox}" SelectedValue="{Binding FillMode, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag" Height="22">
-                                        <ComboBoxItem Content="Hatch" Tag="{x:Static Models:FillType.Hatch}"/>
-                                        <ComboBoxItem Content="Image" Tag="{x:Static Models:FillType.Image}"/>
-                                    </ComboBox>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="材质图案" Width="*">
+
+                        <DataGridTemplateColumn Header="Hatch 图案" Width="*">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <Grid>
@@ -186,12 +197,12 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding PatternName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                                         <Button Grid.Column="1" Content="..." Style="{StaticResource ModernBtn}" 
-                        Width="25" Height="18" Margin="5,0" Padding="0" 
-                        Click="SelectMaterial_Click"/>
+                                                Width="25" Height="18" Margin="5,0" Padding="0" Click="SelectMaterial_Click"/>
                                     </Grid>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
+
                         <DataGridTemplateColumn Header="颜色" Width="150">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
@@ -201,22 +212,18 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <Border Width="14" Height="14" CornerRadius="2" 
-                        Background="{Binding PreviewBrush}" 
-                        BorderBrush="#555555" BorderThickness="1" 
-                        VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding ColorDescription}" 
-                           Foreground="{StaticResource TextBrush}" 
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                        <Button Grid.Column="2" Content="..." Style="{StaticResource ModernBtn}" 
-                        Width="22" Height="18" Padding="0" 
-                        Click="SelectColor_Click"/>
+                                        <Border Width="14" Height="14" CornerRadius="2" Background="{Binding PreviewBrush}" BorderBrush="#555555" BorderThickness="1" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding ColorDescription}" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        <Button Grid.Column="2" Content="..." Style="{StaticResource ModernBtn}" Width="22" Height="18" Padding="0" Click="SelectColor_Click"/>
                                     </Grid>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
+
                         <DataGridTextColumn Header="比例" Binding="{Binding Scale}" Width="60"/>
+
                         <DataGridTextColumn Header="透明度" Binding="{Binding Opacity}" Width="60"/>
+
                         <DataGridTemplateColumn Header="操作" Width="80">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
@@ -236,7 +243,7 @@
             </Grid>
 
             <StatusBar Grid.Row="3" Background="#007ACC" Foreground="White">
-                <TextBlock Text=" 就绪 | 请选择闭合多段线开始操作" FontSize="10" Margin="5,0"/>
+                <TextBlock Text=" 就绪 | 材质将同步导出至 PS 选区" FontSize="10" Margin="5,0"/>
             </StatusBar>
         </Grid>
     </Border>
