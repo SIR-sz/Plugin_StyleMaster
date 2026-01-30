@@ -106,19 +106,19 @@ namespace StyleMaster.Services
         /// <summary>
         /// 增强版 SVG 导出：匹配标准纸张，生成辅助矩形，并导出对齐元数据。
         /// </summary>
-        public static Autodesk.AutoCAD.DatabaseServices.Extents3d ExportToSvg(System.Collections.Generic.IEnumerable<StyleMaster.Models.MaterialItem> items, string savePath)
+        public static Extents3d ExportToSvg(IEnumerable<MaterialItem> items, string savePath)
         {
-            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            var doc = Application.DocumentManager.MdiActiveDocument;
             var db = doc.Database;
             var ed = doc.Editor;
-            Autodesk.AutoCAD.DatabaseServices.Extents3d totalExt = new Autodesk.AutoCAD.DatabaseServices.Extents3d();
+            Extents3d totalExt = new Extents3d();
 
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
 
-                // 1. 计算原始包围盒
+                // 1. 计算原始内容包围盒
                 bool hasEnts = false;
                 foreach (var item in items)
                 {
@@ -126,8 +126,7 @@ namespace StyleMaster.Services
                     var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
                     foreach (ObjectId id in ids)
                     {
-                        var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                        if (ent != null)
+                        if (tr.GetObject(id, OpenMode.ForRead) is Entity ent)
                         {
                             if (!hasEnts) { totalExt = ent.GeometricExtents; hasEnts = true; }
                             else { totalExt.AddExtents(ent.GeometricExtents); }
@@ -137,74 +136,96 @@ namespace StyleMaster.Services
 
                 if (!hasEnts) return totalExt;
 
-                // 2. 匹配标准纸张并计算新的辅助框 (DCFW)
+                // 2. 动态匹配 A3 比例模数 (向下兼容 0.1, 0.01, 0.001 倍)
                 double rawW = totalExt.MaxPoint.X - totalExt.MinPoint.X;
                 double rawH = totalExt.MaxPoint.Y - totalExt.MinPoint.Y;
+                double maxDim = Math.Max(rawW, rawH);
 
-                // 找到能装下的最小 A 系列纸张
-                double paperW = 420.0, paperH = 297.0; // 默认 A3
-                if (rawW > 400 || rawH > 280) { paperW = 594.0; paperH = 420.0; } // A2
-                if (rawW > 570 || rawH > 400) { paperW = 841.0; paperH = 594.0; } // A1
+                // 定义基础 A3 尺寸
+                double baseA3Long = 420.0;
+                double baseA3Short = 297.0;
 
-                // 计算居中后的 DCFW 范围
+                // 自动寻找模数阶梯
+                double modifier = 1.0;
+                if (maxDim <= 0.42) modifier = 0.001;      // 针对毫米级微型详图
+                else if (maxDim <= 4.2) modifier = 0.01;   // 针对厘米级
+                else if (maxDim <= 42.0) modifier = 0.1;   // 针对分米级/较小构件
+                else modifier = 1.0;                       // 标准 A3 或以上
+
+                bool isLandscape = rawW > rawH;
+                double unitW = (isLandscape ? baseA3Long : baseA3Short) * modifier;
+                double unitH = (isLandscape ? baseA3Short : baseA3Long) * modifier;
+
+                // 计算整数倍数 (向上取整)
+                double multiW = Math.Max(1, Math.Ceiling(rawW / unitW));
+                double multiH = Math.Max(1, Math.Ceiling(rawH / unitH));
+
+                double targetW = multiW * unitW;
+                double targetH = multiH * unitH;
+
+                // 3. 计算中心对齐的辅助边界 (DCFW)
                 double centerX = (totalExt.MinPoint.X + totalExt.MaxPoint.X) / 2.0;
                 double centerY = (totalExt.MinPoint.Y + totalExt.MaxPoint.Y) / 2.0;
 
-                double dcfwMinX = centerX - (paperW / 2.0);
-                double dcfwMaxX = centerX + (paperW / 2.0);
-                double dcfwMinY = centerY - (paperH / 2.0);
-                double dcfwMaxY = centerY + (paperH / 2.0);
+                double dcfwMinX = centerX - (targetW / 2.0);
+                double dcfwMaxY = centerY + (targetH / 2.0); // 顶部
+                double dcfwMinY = centerY - (targetH / 2.0); // 底部
 
-                // 3. 生成 DCFW 矩形 (打印 PDF 的 Window 窗口捕捉此框)
-                string layerName = "DCFW";
+                // 4. 更新 DCFW 矩形框
+                string dcfwLayer = "DCFW";
                 var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
-                if (!lt.Has(layerName))
+                if (!lt.Has(dcfwLayer))
                 {
-                    var ltr = new LayerTableRecord { Name = layerName, Color = Color.FromColorIndex(ColorMethod.ByAci, 4), IsPlottable = false };
+                    var ltr = new LayerTableRecord { Name = dcfwLayer, Color = Color.FromColorIndex(ColorMethod.ByAci, 4), IsPlottable = false };
                     lt.Add(ltr); tr.AddNewlyCreatedDBObject(ltr, true);
                 }
 
                 using (Polyline rect = new Polyline(4))
                 {
                     rect.AddVertexAt(0, new Point2d(dcfwMinX, dcfwMinY), 0, 0, 0);
-                    rect.AddVertexAt(1, new Point2d(dcfwMaxX, dcfwMinY), 0, 0, 0);
-                    rect.AddVertexAt(2, new Point2d(dcfwMaxX, dcfwMaxY), 0, 0, 0);
+                    rect.AddVertexAt(1, new Point2d(dcfwMinX + targetW, dcfwMinY), 0, 0, 0);
+                    rect.AddVertexAt(2, new Point2d(dcfwMinX + targetW, dcfwMaxY), 0, 0, 0);
                     rect.AddVertexAt(3, new Point2d(dcfwMinX, dcfwMaxY), 0, 0, 0);
-                    rect.Closed = true; rect.Layer = layerName;
+                    rect.Closed = true; rect.Layer = dcfwLayer;
                     btr.AppendEntity(rect); tr.AddNewlyCreatedDBObject(rect, true);
                 }
 
-                // 4. 导出 SVG (写入核心对齐元数据)
+                // 5. 导出 SVG 并写入优化后的坐标元数据
                 StringBuilder svg = new StringBuilder();
                 svg.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-                // viewBox 使用 DCFW 的范围
-                svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{dcfwMinX} {-dcfwMaxY} {paperW} {paperH}\" " +
-                               $"data-width=\"{paperW}\" data-height=\"{paperH}\" data-minx=\"{dcfwMinX}\" data-maxy=\"{dcfwMaxY}\">");
+                // 使用标准的 viewBox 格式，并存储 data 属性供 PS 使用
+                svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{dcfwMinX} {-dcfwMaxY} {targetW} {targetH}\" " +
+                               $"data-width=\"{targetW}\" data-height=\"{targetH}\" " +
+                               $"data-minx=\"{dcfwMinX}\" data-maxy=\"{dcfwMaxY}\">");
 
                 foreach (var item in items)
                 {
                     if (!item.IsFillLayer) continue;
                     var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
-                    svg.AppendLine($"<g id=\"{item.LayerName}\">");
+                    svg.AppendLine($"  <g id=\"{item.LayerName}\">");
                     foreach (ObjectId id in ids)
                     {
                         if (tr.GetObject(id, OpenMode.ForRead) is Polyline pl)
                         {
-                            svg.Append("<path d=\"M ");
+                            svg.Append("    <path d=\"M ");
                             for (int i = 0; i < pl.NumberOfVertices; i++)
                             {
                                 Point2d pt = pl.GetPoint2dAt(i);
-                                svg.Append($"{pt.X:F3} {-pt.Y:F3} ");
+                                // 统一 Y 轴取反逻辑，确保 SVG 规范对齐
+                                svg.Append($"{pt.X:F4} {-pt.Y:F4} ");
                                 if (i < pl.NumberOfVertices - 1) svg.Append("L ");
                             }
-                            svg.AppendLine("Z\" fill=\"none\" stroke=\"black\" />");
+                            svg.AppendLine("Z\" fill=\"none\" stroke=\"black\" stroke-width=\"0.01\" />");
                         }
                     }
-                    svg.AppendLine("</g>");
+                    svg.AppendLine("  </g>");
                 }
                 svg.AppendLine("</svg>");
+
                 File.WriteAllText(savePath, svg.ToString());
                 tr.Commit();
+
+                ed.WriteMessage($"\n[StyleMaster] 导出成功! 匹配模数: {modifier}x A3. 请捕捉 DCFW 矩形打印 PDF.");
             }
             return totalExt;
         }
