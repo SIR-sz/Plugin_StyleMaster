@@ -645,17 +645,21 @@ namespace StyleMaster.UI
                 System.Windows.MessageBox.Show($"刷新图层 {item.LayerName} 失败: {ex.Message}");
             }
         }
-        /// <summary>
-        /// 导出按钮点击事件：同步导出 SVG，异步导出 PDF，并输出坐标兜底。
-        /// 修改：改为 async 方法，增加了 Task.Run 异步处理打印逻辑。
-        /// </summary>
+        /* * 文件位置：StyleMaster/UI/MainControlWindow.xaml.cs
+  * 方法：ExportSvg_Click
+  * 功能：导出按钮点击事件。
+  * 修改说明：增加了对打印方法的调用，并传入完整的 MaterialItems 集合以供过滤。
+  */
         private void ExportSvg_Click(object sender, System.Windows.RoutedEventArgs e)
         {
             if (MaterialItems == null || MaterialItems.Count == 0) return;
 
+            // 强制提交 DataGrid 的任何待定更改
+            MainDataGrid.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Row, true);
+
             Microsoft.Win32.SaveFileDialog saveFileDialog = new Microsoft.Win32.SaveFileDialog
             {
-                Filter = "SVG 文件 (*.svg)|*.svg",
+                Filter = "SVG 配置文件 (*.svg)|*.svg",
                 FileName = "StyleMaster_Export"
             };
 
@@ -663,17 +667,15 @@ namespace StyleMaster.UI
             {
                 try
                 {
-                    // 1. 同步导出 SVG 并生成 DCFW 边界矩形
+                    // 1. 导出配置 SVG 并获取范围
                     Autodesk.AutoCAD.DatabaseServices.Extents3d ext = StyleMaster.Services.CadRenderingService.ExportToSvg(MaterialItems, saveFileDialog.FileName);
 
-                    // 2. 命令行输出坐标 (关键：供手动打印使用)
-                    var ed = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor;
-                    ed.WriteMessage("\n[StyleMaster] 导出范围已锁定 (DCFW 图层已生成)：");
-                    ed.WriteMessage($"\n >> 左下角 (Min): {ext.MinPoint.X:F2}, {ext.MinPoint.Y:F2}");
-                    ed.WriteMessage($"\n >> 右上角 (Max): {ext.MaxPoint.X:F2}, {ext.MaxPoint.Y:F2}");
-                    ed.WriteMessage("\n[提示] 材质选区已就绪。请手动使用 Window 窗口模式打印 PDF 线稿。");
+                    // 2. 导出 PDF 索引稿（自动过滤未勾选图层）
+                    string pdfPath = saveFileDialog.FileName.Substring(0, saveFileDialog.FileName.LastIndexOf(".")) + ".pdf";
+                    StyleMaster.Services.CadRenderingService.PlotRepresentationPdf(ext, pdfPath, MaterialItems);
 
-                    System.Windows.MessageBox.Show("SVG 导出成功！坐标范围已输出至命令行。");
+                    Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage($"\n[StyleMaster] 导出完成：\nConfig: {saveFileDialog.FileName}\nPDF: {pdfPath}");
+                    System.Windows.MessageBox.Show("导出成功！请在 Photoshop 中运行导入脚本。");
                 }
                 catch (System.Exception ex)
                 {

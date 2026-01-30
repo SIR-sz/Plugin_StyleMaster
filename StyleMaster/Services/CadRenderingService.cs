@@ -17,11 +17,12 @@ namespace StyleMaster.Services
 {
     public static class CadRenderingService
     {
-        /// <summary>
-        /// 自动化打印表现层线稿为 PDF。
-        /// 修改：修正了 PlotSettings 属性引用和打印引擎初始化逻辑。
-        /// </summary>
-        public static void PlotRepresentationPdf(Autodesk.AutoCAD.DatabaseServices.Extents3d ext, string pdfPath, System.Collections.Generic.List<string> fillLayerNames)
+        /* * 文件位置：StyleMaster/Services/CadRenderingService.cs
+ * 方法：PlotRepresentationPdf
+ * 功能：自动化打印表现层线稿为 PDF。
+ * 修改说明：增加了对 MaterialItem.IsExportEnabled 的判断。只有勾选了“打印”的图层才会显示，未勾选的图层在打印时会被临时关闭。
+ */
+        public static void PlotRepresentationPdf(Autodesk.AutoCAD.DatabaseServices.Extents3d ext, string pdfPath, System.Collections.Generic.IEnumerable<StyleMaster.Models.MaterialItem> items)
         {
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             var db = doc.Database;
@@ -30,16 +31,28 @@ namespace StyleMaster.Services
             {
                 using (var tr = db.TransactionManager.StartTransaction())
                 {
-                    // 1. 隐藏填充层
+                    // 1. 根据用户在 UI 上的勾选状态，控制图层开关
                     var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
-                    var layersToRestore = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.LayerTableRecord>();
-                    foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in lt)
+                    var layersToRestore = new System.Collections.Generic.Dictionary<Autodesk.AutoCAD.DatabaseServices.LayerTableRecord, bool>();
+
+                    foreach (var item in items)
                     {
-                        var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
-                        if (fillLayerNames.Contains(ltr.Name) && !ltr.IsOff)
+                        if (lt.Has(item.LayerName))
                         {
-                            ltr.IsOff = true; // 临时关闭填充层
-                            layersToRestore.Add(ltr);
+                            var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[item.LayerName], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
+
+                            // 备份原始状态
+                            layersToRestore[ltr] = ltr.IsOff;
+
+                            // 如果用户没勾选“打印”，则关闭图层
+                            if (!item.IsExportEnabled)
+                            {
+                                ltr.IsOff = true;
+                            }
+                            else
+                            {
+                                ltr.IsOff = false;
+                            }
                         }
                     }
 
@@ -51,7 +64,6 @@ namespace StyleMaster.Services
                     ps.CopyFrom(lo);
                     Autodesk.AutoCAD.DatabaseServices.PlotSettingsValidator psv = Autodesk.AutoCAD.DatabaseServices.PlotSettingsValidator.Current;
 
-                    // 设置打印窗口范围
                     Autodesk.AutoCAD.DatabaseServices.Extents2d windowExt = new Autodesk.AutoCAD.DatabaseServices.Extents2d(ext.MinPoint.X, ext.MinPoint.Y, ext.MaxPoint.X, ext.MaxPoint.Y);
                     psv.SetPlotWindowArea(ps, windowExt);
                     psv.SetPlotType(ps, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
@@ -59,27 +71,24 @@ namespace StyleMaster.Services
                     psv.SetStdScaleType(ps, Autodesk.AutoCAD.DatabaseServices.StdScaleType.ScaleToFit);
                     psv.SetPlotCentered(ps, true);
 
-                    // 设置 PDF 打印机
+                    // 强制使用 MediaBox 对应的全边距纸张
                     psv.SetPlotConfigurationName(ps, "AutoCAD PDF (High Quality Print).pc3", "ISO_full_bleed_A3_(420.00_x_297.00_MM)");
 
-                    // ✨ 修改：修正 StyleSheet 获取路径 (从 ps.CurrentStyleSheet 获取)
                     if (!string.IsNullOrEmpty(ps.CurrentStyleSheet))
                         psv.SetCurrentStyleSheet(ps, ps.CurrentStyleSheet);
 
                     pi.OverrideSettings = ps;
 
-                    // ✨ 修改：直接实例化 PlotInfoValidator 并验证
                     Autodesk.AutoCAD.PlottingServices.PlotInfoValidator piv = new Autodesk.AutoCAD.PlottingServices.PlotInfoValidator();
                     piv.MediaMatchingPolicy = Autodesk.AutoCAD.PlottingServices.MatchingPolicy.MatchEnabled;
                     piv.Validate(pi);
 
-                    // 3. 执行打印过程
+                    // 3. 执行打印
                     if (Autodesk.AutoCAD.PlottingServices.PlotFactory.ProcessPlotState == Autodesk.AutoCAD.PlottingServices.ProcessPlotState.NotPlotting)
                     {
                         using (var pe = Autodesk.AutoCAD.PlottingServices.PlotFactory.CreatePublishEngine())
                         {
                             pe.BeginPlot(null, null);
-                            // ✨ 修改：修正 BeginDocument 签名，简化进度对话框参数
                             pe.BeginDocument(pi, doc.Name, null, 1, true, pdfPath);
 
                             Autodesk.AutoCAD.PlottingServices.PlotPageInfo ppi = new Autodesk.AutoCAD.PlottingServices.PlotPageInfo();
@@ -92,8 +101,11 @@ namespace StyleMaster.Services
                         }
                     }
 
-                    // 4. 恢复图层状态
-                    foreach (var ltr in layersToRestore) ltr.IsOff = false;
+                    // 4. 恢复图层原始状态
+                    foreach (var kvp in layersToRestore)
+                    {
+                        kvp.Key.IsOff = kvp.Value;
+                    }
 
                     tr.Commit();
                 }
@@ -106,6 +118,10 @@ namespace StyleMaster.Services
         /// <summary>
         /// 增强版 SVG 导出：匹配标准纸张，生成辅助矩形，并导出对齐元数据。
         /// </summary>
+        /* * 文件位置：StyleMaster/Services/CadRenderingService.cs
+  * 方法：ExportToSvg
+  * 功能：导出包含颜色映射元数据的配置 SVG，用于 PS 脚本识别图层颜色
+  */
         public static Extents3d ExportToSvg(IEnumerable<MaterialItem> items, string savePath)
         {
             var doc = Application.DocumentManager.MdiActiveDocument;
@@ -118,11 +134,12 @@ namespace StyleMaster.Services
             {
                 var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
 
-                // 1. 计算原始内容包围盒
+                // 1. 计算选中的打印图层包围盒
                 bool hasEnts = false;
-                foreach (var item in items)
+                var exportItems = items.Where(x => x.IsExportEnabled).ToList();
+
+                foreach (var item in exportItems)
                 {
-                    if (!item.IsFillLayer) continue;
                     var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
                     foreach (ObjectId id in ids)
                     {
@@ -136,42 +153,34 @@ namespace StyleMaster.Services
 
                 if (!hasEnts) return totalExt;
 
-                // 2. 动态匹配 A3 比例模数 (向下兼容 0.1, 0.01, 0.001 倍)
+                // 2. 匹配模数对齐逻辑 (A3 比例)
                 double rawW = totalExt.MaxPoint.X - totalExt.MinPoint.X;
                 double rawH = totalExt.MaxPoint.Y - totalExt.MinPoint.Y;
                 double maxDim = Math.Max(rawW, rawH);
 
-                // 定义基础 A3 尺寸
                 double baseA3Long = 420.0;
                 double baseA3Short = 297.0;
-
-                // 自动寻找模数阶梯
                 double modifier = 1.0;
-                if (maxDim <= 0.42) modifier = 0.001;      // 针对毫米级微型详图
-                else if (maxDim <= 4.2) modifier = 0.01;   // 针对厘米级
-                else if (maxDim <= 42.0) modifier = 0.1;   // 针对分米级/较小构件
-                else modifier = 1.0;                       // 标准 A3 或以上
+
+                if (maxDim <= 0.42) modifier = 0.001;
+                else if (maxDim <= 4.2) modifier = 0.01;
+                else if (maxDim <= 42.0) modifier = 0.1;
 
                 bool isLandscape = rawW > rawH;
                 double unitW = (isLandscape ? baseA3Long : baseA3Short) * modifier;
                 double unitH = (isLandscape ? baseA3Short : baseA3Long) * modifier;
 
-                // 计算整数倍数 (向上取整)
-                double multiW = Math.Max(1, Math.Ceiling(rawW / unitW));
-                double multiH = Math.Max(1, Math.Ceiling(rawH / unitH));
+                double targetW = Math.Max(1, Math.Ceiling(rawW / unitW)) * unitW;
+                double targetH = Math.Max(1, Math.Ceiling(rawH / unitH)) * unitH;
 
-                double targetW = multiW * unitW;
-                double targetH = multiH * unitH;
-
-                // 3. 计算中心对齐的辅助边界 (DCFW)
                 double centerX = (totalExt.MinPoint.X + totalExt.MaxPoint.X) / 2.0;
                 double centerY = (totalExt.MinPoint.Y + totalExt.MaxPoint.Y) / 2.0;
 
                 double dcfwMinX = centerX - (targetW / 2.0);
-                double dcfwMaxY = centerY + (targetH / 2.0); // 顶部
-                double dcfwMinY = centerY - (targetH / 2.0); // 底部
+                double dcfwMaxY = centerY + (targetH / 2.0);
+                double dcfwMinY = centerY - (targetH / 2.0);
 
-                // 4. 更新 DCFW 矩形框
+                // 3. 生成辅助 DCFW 矩形
                 string dcfwLayer = "DCFW";
                 var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
                 if (!lt.Has(dcfwLayer))
@@ -190,54 +199,31 @@ namespace StyleMaster.Services
                     btr.AppendEntity(rect); tr.AddNewlyCreatedDBObject(rect, true);
                 }
 
-                // 5. 导出 SVG 并写入优化后的坐标元数据
-                // 5. 导出 SVG 并写入优化后的坐标元数据
+                // 4. 导出配置清单 SVG
                 StringBuilder svg = new StringBuilder();
                 svg.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-                // 使用标准的 viewBox 格式，并存储 data 属性供 PS 使用
-                svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{dcfwMinX} {-dcfwMaxY} {targetW} {targetH}\" " +
+                svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" " +
                                $"data-width=\"{targetW}\" data-height=\"{targetH}\" " +
                                $"data-minx=\"{dcfwMinX}\" data-maxy=\"{dcfwMaxY}\">");
 
-                foreach (var item in items)
+                foreach (var item in exportItems)
                 {
-                    if (!item.IsFillLayer) continue;
-                    var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
-                    svg.AppendLine($"  <g id=\"{item.LayerName}\">");
-                    foreach (ObjectId id in ids)
-                    {
-                        if (tr.GetObject(id, OpenMode.ForRead) is Polyline pl)
-                        {
-                            svg.Append("    <path d=\"M ");
-                            for (int i = 0; i < pl.NumberOfVertices; i++)
-                            {
-                                Point2d pt = pl.GetPoint2dAt(i);
-                                // 统一 Y 轴取反逻辑
-                                svg.Append($"{pt.X:F4} {-pt.Y:F4} ");
-                                if (i < pl.NumberOfVertices - 1) svg.Append("L ");
-                            }
-                            // 修改点 1：将 fill="none" 改为 fill="black"，方便 PS 脚本识别闭合区域生成选区
-                            svg.AppendLine("Z\" fill=\"black\" stroke=\"none\" />");
-                        }
-                    }
-                    svg.AppendLine("  </g>");
+                    // 获取图层的 HEX 颜色
+                    System.Drawing.Color drawingCol = item.CadColor.ColorValue;
+                    string hexColor = $"#{drawingCol.R:X2}{drawingCol.G:X2}{drawingCol.B:X2}";
+
+                    // 仅导出元数据节点，不再导出 path 坐标
+                    svg.AppendLine($"  <metadata id=\"{item.LayerName}\" color=\"{hexColor}\" />");
                 }
                 svg.AppendLine("</svg>");
 
                 File.WriteAllText(savePath, svg.ToString());
                 tr.Commit();
 
-                // 修改点 2：构造基于 DCFW 辅助矩形的 Extents3d 用于返回
-                Extents3d dcfwExt = new Extents3d(
-                    new Point3d(dcfwMinX, dcfwMinY, 0),
-                    new Point3d(dcfwMinX + targetW, dcfwMaxY, 0)
-                );
+                ed.WriteMessage($"\n[StyleMaster] 配置导出成功! 请捕捉 DCFW 矩形打印 PDF。");
 
-                ed.WriteMessage($"\n[StyleMaster] 导出成功! 匹配模数: {modifier}x A3.");
-                ed.WriteMessage($"\n[提示] 请捕捉 DCFW 矩形窗口打印 PDF，确保与 SVG 完美重叠。");
-
-                // 返回修正后的范围，确保 UI 层输出的坐标与 PDF 窗口一致
-                return dcfwExt;
+                // 返回修正后的 DCFW 范围
+                return new Extents3d(new Point3d(dcfwMinX, dcfwMinY, 0), new Point3d(dcfwMinX + targetW, dcfwMaxY, 0));
             }
         }
 
@@ -409,17 +395,27 @@ namespace StyleMaster.Services
             }
         }
 
-        /// <summary>
-        /// 获取指定图层上的边界实体（排除填充和图片）。
-        /// </summary>
+        /* * 文件位置：StyleMaster/Services/CadRenderingService.cs
+ * 方法：GetEntitiesOnLayer
+ * 功能：获取指定图层上的边界实体。
+ * 修改说明：增加了对 BlockReference 的过滤，防止外部参照干扰填充计算，从而修复 eInvalidInput 报错。
+ */
         private static ObjectIdCollection GetEntitiesOnLayer(BlockTableRecord btr, Transaction tr, string layerName)
         {
             ObjectIdCollection ids = new ObjectIdCollection();
             foreach (ObjectId id in btr)
             {
                 var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                if (ent != null && ent.Layer.Equals(layerName, StringComparison.OrdinalIgnoreCase) && !(ent is Hatch) && !(ent is RasterImage))
-                    ids.Add(id);
+                if (ent != null && ent.Layer.Equals(layerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 核心过滤逻辑：排除填充、图片以及块参照（外部参照）
+                    if (!(ent is Hatch) &&
+                        !(ent is RasterImage) &&
+                        !(ent is BlockReference)) // 显式过滤外部参照和普通块
+                    {
+                        ids.Add(id);
+                    }
+                }
             }
             return ids;
         }
