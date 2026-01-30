@@ -191,6 +191,7 @@ namespace StyleMaster.Services
                 }
 
                 // 5. 导出 SVG 并写入优化后的坐标元数据
+                // 5. 导出 SVG 并写入优化后的坐标元数据
                 StringBuilder svg = new StringBuilder();
                 svg.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
                 // 使用标准的 viewBox 格式，并存储 data 属性供 PS 使用
@@ -211,11 +212,12 @@ namespace StyleMaster.Services
                             for (int i = 0; i < pl.NumberOfVertices; i++)
                             {
                                 Point2d pt = pl.GetPoint2dAt(i);
-                                // 统一 Y 轴取反逻辑，确保 SVG 规范对齐
+                                // 统一 Y 轴取反逻辑
                                 svg.Append($"{pt.X:F4} {-pt.Y:F4} ");
                                 if (i < pl.NumberOfVertices - 1) svg.Append("L ");
                             }
-                            svg.AppendLine("Z\" fill=\"none\" stroke=\"black\" stroke-width=\"0.01\" />");
+                            // 修改点 1：将 fill="none" 改为 fill="black"，方便 PS 脚本识别闭合区域生成选区
+                            svg.AppendLine("Z\" fill=\"black\" stroke=\"none\" />");
                         }
                     }
                     svg.AppendLine("  </g>");
@@ -225,9 +227,18 @@ namespace StyleMaster.Services
                 File.WriteAllText(savePath, svg.ToString());
                 tr.Commit();
 
-                ed.WriteMessage($"\n[StyleMaster] 导出成功! 匹配模数: {modifier}x A3. 请捕捉 DCFW 矩形打印 PDF.");
+                // 修改点 2：构造基于 DCFW 辅助矩形的 Extents3d 用于返回
+                Extents3d dcfwExt = new Extents3d(
+                    new Point3d(dcfwMinX, dcfwMinY, 0),
+                    new Point3d(dcfwMinX + targetW, dcfwMaxY, 0)
+                );
+
+                ed.WriteMessage($"\n[StyleMaster] 导出成功! 匹配模数: {modifier}x A3.");
+                ed.WriteMessage($"\n[提示] 请捕捉 DCFW 矩形窗口打印 PDF，确保与 SVG 完美重叠。");
+
+                // 返回修正后的范围，确保 UI 层输出的坐标与 PDF 窗口一致
+                return dcfwExt;
             }
-            return totalExt;
         }
 
         /// <summary>
