@@ -103,104 +103,109 @@ namespace StyleMaster.Services
         /// 增强版 SVG 导出：计算范围、导出数据，并在 CAD 中生成非打印的 DCFW 边界框。
         /// 修改：增加了创建 DCFW 图层及绘制矩形框的逻辑。
         /// </summary>
+        /// <summary>
+        /// 增强版 SVG 导出：匹配标准纸张，生成辅助矩形，并导出对齐元数据。
+        /// </summary>
         public static Autodesk.AutoCAD.DatabaseServices.Extents3d ExportToSvg(System.Collections.Generic.IEnumerable<StyleMaster.Models.MaterialItem> items, string savePath)
         {
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
-            if (doc == null) return new Autodesk.AutoCAD.DatabaseServices.Extents3d();
             var db = doc.Database;
             var ed = doc.Editor;
-
             Autodesk.AutoCAD.DatabaseServices.Extents3d totalExt = new Autodesk.AutoCAD.DatabaseServices.Extents3d();
 
-            try
+            using (doc.LockDocument())
+            using (var tr = db.TransactionManager.StartTransaction())
             {
-                using (doc.LockDocument())
+                var btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
+
+                // 1. 计算原始包围盒
+                bool hasEnts = false;
+                foreach (var item in items)
                 {
-                    using (var tr = db.TransactionManager.StartTransaction())
+                    if (!item.IsFillLayer) continue;
+                    var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
+                    foreach (ObjectId id in ids)
                     {
-                        var btr = (Autodesk.AutoCAD.DatabaseServices.BlockTableRecord)tr.GetObject(db.CurrentSpaceId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
-
-                        // 1. 计算包围盒
-                        bool hasEnts = false;
-                        foreach (var item in items)
+                        var ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
+                        if (ent != null)
                         {
-                            // 注意：此处调用您现有的 GetEntitiesOnLayer
-                            var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
-                            foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in ids)
-                            {
-                                if (tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is Autodesk.AutoCAD.DatabaseServices.Entity ent)
-                                {
-                                    if (!hasEnts) { totalExt = ent.GeometricExtents; hasEnts = true; }
-                                    else { totalExt.AddExtents(ent.GeometricExtents); }
-                                }
-                            }
+                            if (!hasEnts) { totalExt = ent.GeometricExtents; hasEnts = true; }
+                            else { totalExt.AddExtents(ent.GeometricExtents); }
                         }
-
-                        if (!hasEnts) return totalExt;
-
-                        // 2. 生成 DCFW 边界矩形框 (不可打印图层)
-                        string dcfwLayer = "DCFW";
-                        var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(db.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
-                        Autodesk.AutoCAD.DatabaseServices.ObjectId ltId;
-
-                        if (!lt.Has(dcfwLayer))
-                        {
-                            var ltr = new Autodesk.AutoCAD.DatabaseServices.LayerTableRecord();
-                            ltr.Name = dcfwLayer;
-                            ltr.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 4);
-                            ltr.IsPlottable = false; // ✨ 核心：设置为不打印
-                            ltId = lt.Add(ltr);
-                            tr.AddNewlyCreatedDBObject(ltr, true);
-                        }
-                        else { ltId = lt[dcfwLayer]; }
-
-                        using (var rect = new Autodesk.AutoCAD.DatabaseServices.Polyline(4))
-                        {
-                            rect.AddVertexAt(0, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MinPoint.X, totalExt.MinPoint.Y), 0, 0, 0);
-                            rect.AddVertexAt(1, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MaxPoint.X, totalExt.MinPoint.Y), 0, 0, 0);
-                            rect.AddVertexAt(2, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MaxPoint.X, totalExt.MaxPoint.Y), 0, 0, 0);
-                            rect.AddVertexAt(3, new Autodesk.AutoCAD.Geometry.Point2d(totalExt.MinPoint.X, totalExt.MaxPoint.Y), 0, 0, 0);
-                            rect.Closed = true;
-                            rect.LayerId = ltId;
-                            btr.AppendEntity(rect);
-                            tr.AddNewlyCreatedDBObject(rect, true);
-                        }
-
-                        // 3. 导出 SVG 数据
-                        double width = totalExt.MaxPoint.X - totalExt.MinPoint.X;
-                        double height = totalExt.MaxPoint.Y - totalExt.MinPoint.Y;
-                        System.Text.StringBuilder svg = new System.Text.StringBuilder();
-                        svg.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-                        svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{totalExt.MinPoint.X} {-totalExt.MaxPoint.Y} {width} {height}\" data-width=\"{width:F2}\" data-height=\"{height:F2}\" data-minx=\"{totalExt.MinPoint.X:F2}\" data-miny=\"{totalExt.MinPoint.Y:F2}\">");
-
-                        foreach (var item in items)
-                        {
-                            if (!item.IsFillLayer) continue;
-                            var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
-                            svg.AppendLine($"  <g id=\"{item.LayerName}\" data-pattern=\"{item.PatternName}\" fill=\"none\" stroke=\"black\" stroke-width=\"0.1\">");
-                            foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in ids)
-                            {
-                                if (tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is Autodesk.AutoCAD.DatabaseServices.Polyline pl)
-                                {
-                                    svg.Append("    <path d=\"M ");
-                                    for (int i = 0; i < pl.NumberOfVertices; i++)
-                                    {
-                                        var pt = pl.GetPoint2dAt(i);
-                                        svg.Append($"{pt.X} {-pt.Y} ");
-                                        if (i < pl.NumberOfVertices - 1) svg.Append("L ");
-                                    }
-                                    svg.AppendLine("Z\" />");
-                                }
-                            }
-                            svg.AppendLine("  </g>");
-                        }
-                        svg.AppendLine("</svg>");
-                        System.IO.File.WriteAllText(savePath, svg.ToString());
-                        tr.Commit();
                     }
                 }
+
+                if (!hasEnts) return totalExt;
+
+                // 2. 匹配标准纸张并计算新的辅助框 (DCFW)
+                double rawW = totalExt.MaxPoint.X - totalExt.MinPoint.X;
+                double rawH = totalExt.MaxPoint.Y - totalExt.MinPoint.Y;
+
+                // 找到能装下的最小 A 系列纸张
+                double paperW = 420.0, paperH = 297.0; // 默认 A3
+                if (rawW > 400 || rawH > 280) { paperW = 594.0; paperH = 420.0; } // A2
+                if (rawW > 570 || rawH > 400) { paperW = 841.0; paperH = 594.0; } // A1
+
+                // 计算居中后的 DCFW 范围
+                double centerX = (totalExt.MinPoint.X + totalExt.MaxPoint.X) / 2.0;
+                double centerY = (totalExt.MinPoint.Y + totalExt.MaxPoint.Y) / 2.0;
+
+                double dcfwMinX = centerX - (paperW / 2.0);
+                double dcfwMaxX = centerX + (paperW / 2.0);
+                double dcfwMinY = centerY - (paperH / 2.0);
+                double dcfwMaxY = centerY + (paperH / 2.0);
+
+                // 3. 生成 DCFW 矩形 (打印 PDF 的 Window 窗口捕捉此框)
+                string layerName = "DCFW";
+                var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
+                if (!lt.Has(layerName))
+                {
+                    var ltr = new LayerTableRecord { Name = layerName, Color = Color.FromColorIndex(ColorMethod.ByAci, 4), IsPlottable = false };
+                    lt.Add(ltr); tr.AddNewlyCreatedDBObject(ltr, true);
+                }
+
+                using (Polyline rect = new Polyline(4))
+                {
+                    rect.AddVertexAt(0, new Point2d(dcfwMinX, dcfwMinY), 0, 0, 0);
+                    rect.AddVertexAt(1, new Point2d(dcfwMaxX, dcfwMinY), 0, 0, 0);
+                    rect.AddVertexAt(2, new Point2d(dcfwMaxX, dcfwMaxY), 0, 0, 0);
+                    rect.AddVertexAt(3, new Point2d(dcfwMinX, dcfwMaxY), 0, 0, 0);
+                    rect.Closed = true; rect.Layer = layerName;
+                    btr.AppendEntity(rect); tr.AddNewlyCreatedDBObject(rect, true);
+                }
+
+                // 4. 导出 SVG (写入核心对齐元数据)
+                StringBuilder svg = new StringBuilder();
+                svg.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+                // viewBox 使用 DCFW 的范围
+                svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{dcfwMinX} {-dcfwMaxY} {paperW} {paperH}\" " +
+                               $"data-width=\"{paperW}\" data-height=\"{paperH}\" data-minx=\"{dcfwMinX}\" data-maxy=\"{dcfwMaxY}\">");
+
+                foreach (var item in items)
+                {
+                    if (!item.IsFillLayer) continue;
+                    var ids = GetEntitiesOnLayer(btr, tr, item.LayerName);
+                    svg.AppendLine($"<g id=\"{item.LayerName}\">");
+                    foreach (ObjectId id in ids)
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is Polyline pl)
+                        {
+                            svg.Append("<path d=\"M ");
+                            for (int i = 0; i < pl.NumberOfVertices; i++)
+                            {
+                                Point2d pt = pl.GetPoint2dAt(i);
+                                svg.Append($"{pt.X:F3} {-pt.Y:F3} ");
+                                if (i < pl.NumberOfVertices - 1) svg.Append("L ");
+                            }
+                            svg.AppendLine("Z\" fill=\"none\" stroke=\"black\" />");
+                        }
+                    }
+                    svg.AppendLine("</g>");
+                }
+                svg.AppendLine("</svg>");
+                File.WriteAllText(savePath, svg.ToString());
+                tr.Commit();
             }
-            catch (System.Exception ex) { ed.WriteMessage($"\n[错误] {ex.Message}"); }
             return totalExt;
         }
 
