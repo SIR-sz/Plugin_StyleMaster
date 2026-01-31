@@ -32,40 +32,54 @@ namespace StyleMaster.UI
         // 数据源集合
         public ObservableCollection<MaterialItem> MaterialItems { get; set; }
 
+
         /// <summary>
-        /// 构造函数：执行 UI 初始化，并设置数据绑定上下文。
+        /// 构造函数：初始化时尝试从图纸数据库加载已保存的配置。
         /// </summary>
+        /* * 文件位置：StyleMaster/UI/MainControlWindow.xaml.cs
+  * 方法：MainControlWindow (构造函数)
+  * 功能：初始化并唤醒从图纸加载的数据（重建画刷和 CAD 颜色对象）。
+  */
         public MainControlWindow()
         {
             InitializeComponent();
 
-            MaterialItems = new ObservableCollection<MaterialItem>();
+            // 1. 加载基础数据
+            MaterialItems = StyleMaster.Services.CadRenderingService.LoadFromDatabase();
 
-            // ✨ 修改 1：在初始化集合后，立即注册监听器
-            RegisterLayerPropertyTracker();
+            // 2. 视觉唤醒：将 ColorIndex 还原为可显示的画刷和 CAD 颜色对象
+            foreach (var item in MaterialItems)
+            {
+                // 还原 CAD 颜色对象
+                item.CadColor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, (short)item.ColorIndex);
+                // 还原 WPF 画刷
+                item.PreviewBrush = ConvertCadColorToBrush(item.CadColor, item.LayerName);
+            }
 
-            InitializeTestData();
-
+            // 3. 设置上下文
             this.DataContext = this;
             this.MainDataGrid.ItemsSource = MaterialItems;
-        }
-        /// <summary>
-        /// 注册属性追踪逻辑（请确保在构造函数内初始化 MaterialItems 后调用）
-        /// </summary>
-        private void RegisterLayerPropertyTracker()
-        {
+
+            // 4. 注册追踪逻辑
+            RegisterLayerPropertyTracker();
+
+            // 监听集合变动（增删行时保存）
             MaterialItems.CollectionChanged += (s, e) =>
             {
-                if (e.NewItems != null)
-                {
-                    foreach (StyleMaster.Models.MaterialItem item in e.NewItems)
-                    {
-                        item.PropertyChanged -= Item_PropertyChanged;
-                        item.PropertyChanged += Item_PropertyChanged;
-                    }
-                }
+                StyleMaster.Services.CadRenderingService.SaveToDatabase(MaterialItems);
+                if (e.NewItems != null) RegisterLayerPropertyTracker();
             };
-
+        }
+        /// <summary>
+        /// 注册属性追踪器：监听集合内每个对象的属性变化并实时保存到图纸。
+        /// </summary>
+        /* * 文件位置：StyleMaster/UI/MainControlWindow.xaml.cs
+  * 方法：RegisterLayerPropertyTracker
+  * 功能：统一为集合中的所有项挂载属性变更监听，确保数据同步。
+  */
+        private void RegisterLayerPropertyTracker()
+        {
+            if (MaterialItems == null) return;
             foreach (var item in MaterialItems)
             {
                 item.PropertyChanged -= Item_PropertyChanged;
@@ -73,69 +87,66 @@ namespace StyleMaster.UI
             }
         }
 
-        /// <summary>
-        /// 监听模型属性改变：当 IsFrozen 改变时立即同步 CAD。
-        /// </summary>
+        /* * 文件位置：StyleMaster/UI/MainControlWindow.xaml.cs
+ * 方法：Item_PropertyChanged
+ * 功能：响应属性变化。如果是 IsFrozen 变化则同步 CAD，否则仅执行图纸级保存。
+ */
         private void Item_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
+            var item = sender as StyleMaster.Models.MaterialItem;
+            if (item == null) return;
+
+            // 1. 如果是冻结状态改变，立即同步到 CAD 图层
             if (e.PropertyName == "IsFrozen")
             {
-                var item = sender as StyleMaster.Models.MaterialItem;
-                if (item != null)
-                {
-                    SyncSingleLayerFrozenState(item);
-                }
+                SyncSingleLayerFrozenState(item);
             }
+
+            // 2. 任何属性改变都触发图纸数据库保存
+            StyleMaster.Services.CadRenderingService.SaveToDatabase(MaterialItems);
         }
 
-        /// <summary>
-        /// 同步单个图层的冻结状态，并处理“当前层”保护逻辑。
-        /// </summary>
+        /* * 文件位置：StyleMaster/UI/MainControlWindow.xaml.cs
+  * 方法：SyncSingleLayerFrozenState
+  * 功能：将 UI 上的冻结状态实时应用到 AutoCAD 图层表。
+  */
         private void SyncSingleLayerFrozenState(StyleMaster.Models.MaterialItem item)
         {
             var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (doc == null) return;
 
-            var db = doc.Database;
-            var ed = doc.Editor;
-
             using (doc.LockDocument())
             {
-                using (var tr = db.TransactionManager.StartTransaction())
+                using (var tr = doc.Database.TransactionManager.StartTransaction())
                 {
                     try
                     {
-                        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                        var lt = (Autodesk.AutoCAD.DatabaseServices.LayerTable)tr.GetObject(doc.Database.LayerTableId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
                         if (lt.Has(item.LayerName))
                         {
-                            var ltr = (LayerTableRecord)tr.GetObject(lt[item.LayerName], OpenMode.ForWrite);
+                            var ltr = (Autodesk.AutoCAD.DatabaseServices.LayerTableRecord)tr.GetObject(lt[item.LayerName], Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite);
 
-                            // 保护逻辑：如果是当前层，禁止冻结
-                            if (item.IsFrozen && db.Clayer == ltr.ObjectId)
+                            // 保护逻辑：当前层不可冻结
+                            if (item.IsFrozen && doc.Database.Clayer == ltr.ObjectId)
                             {
-                                ed.WriteMessage($"\n[StyleMaster] 无法冻结图层 \"{item.LayerName}\"，因为它是当前工作图层。");
-
-                                // 临时解除监听防止死循环，回滚 UI 状态
+                                doc.Editor.WriteMessage($"\n[StyleMaster] 警告: 无法冻结当前图层 \"{item.LayerName}\"。");
                                 item.PropertyChanged -= Item_PropertyChanged;
                                 item.IsFrozen = false;
                                 item.PropertyChanged += Item_PropertyChanged;
                             }
                             else
                             {
-                                if (ltr.IsFrozen != item.IsFrozen)
-                                {
-                                    ltr.IsFrozen = item.IsFrozen;
-                                }
+                                ltr.IsFrozen = item.IsFrozen;
                             }
                         }
                         tr.Commit();
                     }
                     catch (System.Exception ex)
                     {
-                        ed.WriteMessage($"\n[错误] 图层操作异常: {ex.Message}");
+                        doc.Editor.WriteMessage($"\n[StyleMaster] 冻结操作失败: {ex.Message}");
                     }
                 }
-                ed.Regen();
+                doc.Editor.Regen();
             }
         }
 
@@ -645,44 +656,7 @@ namespace StyleMaster.UI
                 System.Windows.MessageBox.Show($"刷新图层 {item.LayerName} 失败: {ex.Message}");
             }
         }
-        /* * 文件位置：StyleMaster/UI/MainControlWindow.xaml.cs
-  * 方法：ExportSvg_Click
-  * 功能：导出按钮点击事件。
-  * 修改说明：增加了对打印方法的调用，并传入完整的 MaterialItems 集合以供过滤。
-  */
-        private void ExportSvg_Click(object sender, System.Windows.RoutedEventArgs e)
-        {
-            if (MaterialItems == null || MaterialItems.Count == 0) return;
 
-            // 强制提交 DataGrid 的任何待定更改
-            MainDataGrid.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Row, true);
-
-            Microsoft.Win32.SaveFileDialog saveFileDialog = new Microsoft.Win32.SaveFileDialog
-            {
-                Filter = "SVG 配置文件 (*.svg)|*.svg",
-                FileName = "StyleMaster_Export"
-            };
-
-            if (saveFileDialog.ShowDialog() == true)
-            {
-                try
-                {
-                    // 1. 导出配置 SVG 并获取范围
-                    Autodesk.AutoCAD.DatabaseServices.Extents3d ext = StyleMaster.Services.CadRenderingService.ExportToSvg(MaterialItems, saveFileDialog.FileName);
-
-                    // 2. 导出 PDF 索引稿（自动过滤未勾选图层）
-                    string pdfPath = saveFileDialog.FileName.Substring(0, saveFileDialog.FileName.LastIndexOf(".")) + ".pdf";
-                    StyleMaster.Services.CadRenderingService.PlotRepresentationPdf(ext, pdfPath, MaterialItems);
-
-                    Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor.WriteMessage($"\n[StyleMaster] 导出完成：\nConfig: {saveFileDialog.FileName}\nPDF: {pdfPath}");
-                    System.Windows.MessageBox.Show("导出成功！请在 Photoshop 中运行导入脚本。");
-                }
-                catch (System.Exception ex)
-                {
-                    System.Windows.MessageBox.Show($"导出失败: {ex.Message}");
-                }
-            }
-        }
         /// <summary>
         /// 根据列表状态一键冻结/解冻 CAD 图层
         /// </summary>
