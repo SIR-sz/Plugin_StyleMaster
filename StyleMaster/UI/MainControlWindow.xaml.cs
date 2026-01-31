@@ -680,5 +680,63 @@ namespace StyleMaster.UI
             }
             doc.Editor.Regen();
         }
+        /// <summary>
+        /// 初始化 WebView2 浏览器环境并加载本地静态网页。
+        /// 使用虚拟主机名映射解决本地文件访问限制问题。
+        /// </summary>
+        /// <summary>
+        /// 初始化 WebView2 浏览器环境并加载本地静态网页。
+        /// 修正点：将 catch 块中的 Exception 更改为 System.Exception，解决与 AutoCAD 运行时的命名冲突。
+        /// </summary>
+        private async void InitializeWebView()
+        {
+            try
+            {
+                // 等待环境初始化
+                await WebViewStudio.EnsureCoreWebView2Async();
+
+                // 获取本地资源目录绝对路径
+                string assemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                string rootDir = System.IO.Path.GetDirectoryName(assemblyPath);
+                string folderPath = System.IO.Path.Combine(rootDir, "Resources");
+
+                // 建立虚拟域名映射
+                WebViewStudio.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                    "stylemaster.local", folderPath,
+                    Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+
+                // 加载网页
+                WebViewStudio.Source = new Uri("https://stylemaster.local/Studio.html");
+            }
+            catch (System.Exception ex) // 显式使用 System.Exception
+            {
+                System.Windows.MessageBox.Show("浏览器引擎初始化失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 切换到高级模式时的处理逻辑：显示网页面板并执行初始化。
+        /// </summary>
+        private void BtnAdvancedMode_Checked(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (BasicPanel == null || AdvancedPanel == null) return;
+
+            BasicPanel.Visibility = System.Windows.Visibility.Collapsed;
+            AdvancedPanel.Visibility = System.Windows.Visibility.Visible;
+
+            // 延迟初始化或确保仅初始化一次
+            InitializeWebView();
+        }
+
+        /// <summary>
+        /// 切换回基础模式时的处理逻辑：隐藏网页面板。
+        /// </summary>
+        private void BtnAdvancedMode_Unchecked(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (BasicPanel == null || AdvancedPanel == null) return;
+
+            BasicPanel.Visibility = System.Windows.Visibility.Visible;
+            AdvancedPanel.Visibility = System.Windows.Visibility.Collapsed;
+        }
     }
 }

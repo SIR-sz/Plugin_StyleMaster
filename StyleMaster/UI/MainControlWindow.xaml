@@ -4,12 +4,14 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:Models="clr-namespace:StyleMaster.Models;assembly=StyleMaster"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
-        Title="StyleMaster" Height="620" Width="900"
+        Title="StyleMaster" Height="620" Width="1000"
         WindowStyle="None" AllowsTransparency="True" 
         Background="Transparent" WindowStartupLocation="CenterScreen">
 
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
         <SolidColorBrush x:Key="MainBgBrush" Color="#1E1E1E"/>
         <SolidColorBrush x:Key="TitleBarBrush" Color="#2D2D2D"/>
         <SolidColorBrush x:Key="BorderBrush" Color="#3F3F46"/>
@@ -41,20 +43,33 @@
             </Style.Triggers>
         </Style>
 
+        <Style x:Key="TabToggleStyle" TargetType="RadioButton">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="TabBorder" Background="Transparent" Padding="15,0" Margin="2,0" BorderThickness="0,0,0,2">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="TabBorder" Property="Border.BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                                <Setter TargetName="TabBorder" Property="Border.Background" Value="#3E3E42"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="False">
+                                <Setter Property="Foreground" Value="Gray"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="AccentButtonStyle" TargetType="Button" BasedOn="{StaticResource ModernBtn}">
             <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#1C97EA"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="ActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ModernBtn}">
-            <Setter Property="Background" Value="#2D8832"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#38A33D"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -64,6 +79,7 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="32"/>
+                <RowDefinition Height="45"/>
                 <RowDefinition Height="60"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="28"/>
@@ -72,154 +88,146 @@
             <Grid Grid.Row="0" Background="{StaticResource TitleBarBrush}" MouseDown="TitleBar_MouseDown">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0">
                     <TextBlock Text="🎨" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="14"/>
-                    <TextBlock Text="StyleMaster - 彩平大师渲染管线" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                    <TextBlock Text="StyleMaster - 彩平大师" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
                 </StackPanel>
                 <Button Content="✕" HorizontalAlignment="Right" Width="45" Background="Transparent" Foreground="Gray" FontSize="16" BorderThickness="0" Click="Close_Click"/>
             </Grid>
 
-            <Border Grid.Row="1" Background="#252526" Padding="10,0">
+            <Border Grid.Row="1" Background="#252526" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <StackPanel Orientation="Horizontal" Margin="10,0">
+                    <RadioButton x:Name="BtnBasicMode" Content="基础彩平 (CAD)" IsChecked="True" 
+                                 Style="{StaticResource TabToggleStyle}" VerticalContentAlignment="Center"/>
+                    <RadioButton x:Name="BtnAdvancedMode" Content="高级彩屏 (WEB Studio)" 
+                                 Style="{StaticResource TabToggleStyle}" VerticalContentAlignment="Center"
+                                 Checked="BtnAdvancedMode_Checked" Unchecked="BtnAdvancedMode_Unchecked"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Background="#252526" Padding="10,0" 
+                    Visibility="{Binding IsChecked, ElementName=BtnBasicMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource ModernBtn}" Content="🔍 拾取图纸范围" Height="32" Click="PickLayers_Click" Margin="5,0"/>
                     <Separator Width="1" Height="24" Background="{StaticResource BorderBrush}" Margin="10,0"/>
                     <Button Style="{StaticResource AccentButtonStyle}" Content="🚀 一键填充预览" Height="32" Click="RunFill_Click" Margin="5,0" Padding="15,6"/>
                     <Button Style="{StaticResource ModernBtn}" Content="🗑️ 清除所有填充" Height="32" Click="ClearFills_Click" Margin="5,0"/>
-                    <Separator Width="1" Height="24" Background="{StaticResource BorderBrush}" Margin="10,0"/>
-                  
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Row="2">
-                <DataGrid x:Name="MainDataGrid" 
-                          Background="Transparent" BorderThickness="0" AutoGenerateColumns="False" CanUserAddRows="False"
-                          SelectionMode="Extended" SelectionUnit="FullRow"
-                          RowBackground="#2D2D2D" AlternatingRowBackground="#252526" 
-                          Foreground="{StaticResource TextBrush}" 
-                          GridLinesVisibility="None" HeadersVisibility="Column" ItemsSource="{Binding MaterialItems}"
-                          AllowDrop="True" Drop="DataGrid_Drop" DragOver="MainDataGrid_DragOver" 
-                          PreviewMouseLeftButtonDown="MainDataGrid_PreviewMouseLeftButtonDown"
-                          PreviewMouseMove="MainDataGrid_PreviewMouseMove">
-                    <DataGrid.Resources>
-                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#094771"/>
-                        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#094771"/>
-                        <Style TargetType="DataGridColumnHeader">
-                            <Setter Property="Background" Value="#333333"/>
-                            <Setter Property="Foreground" Value="#AAAAAA"/>
-                            <Setter Property="Padding" Value="10,8"/>
-                            <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-                            <Setter Property="FontSize" Value="11"/>
-                        </Style>
-                        <Style TargetType="DataGridCell">
-                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="{x:Type DataGridCell}">
-                                        <Border Padding="10,4" Background="Transparent" BorderThickness="0">
-                                            <ContentPresenter VerticalAlignment="Center" />
-                                        </Border>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </DataGrid.Resources>
+            <Grid Grid.Row="3">
+                <Grid x:Name="BasicPanel" Visibility="Visible">
+                    <DataGrid x:Name="MainDataGrid" 
+                              Background="Transparent" BorderThickness="0" AutoGenerateColumns="False" CanUserAddRows="False"
+                              SelectionMode="Extended" SelectionUnit="FullRow"
+                              RowBackground="#2D2D2D" AlternatingRowBackground="#252526" 
+                              Foreground="{StaticResource TextBrush}" 
+                              GridLinesVisibility="None" HeadersVisibility="Column" ItemsSource="{Binding MaterialItems}"
+                              AllowDrop="True" Drop="DataGrid_Drop" DragOver="MainDataGrid_DragOver" 
+                              PreviewMouseLeftButtonDown="MainDataGrid_PreviewMouseLeftButtonDown"
+                              PreviewMouseMove="MainDataGrid_PreviewMouseMove">
+                        <DataGrid.Resources>
+                            <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#094771"/>
+                            <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#094771"/>
+                            <Style TargetType="DataGridColumnHeader">
+                                <Setter Property="Background" Value="#333333"/>
+                                <Setter Property="Foreground" Value="#AAAAAA"/>
+                                <Setter Property="Padding" Value="10,8"/>
+                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                <Setter Property="FontSize" Value="11"/>
+                            </Style>
+                        </DataGrid.Resources>
 
-                    <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="排序" Width="45">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="⋮⋮" Foreground="#555555" VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="14" Cursor="SizeAll"/>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="排序" Width="45">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="⋮⋮" Foreground="#555555" VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="14" Cursor="SizeAll"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="层级" Binding="{Binding Priority}" Width="45" IsReadOnly="True" Foreground="{StaticResource TextBrush}"/>
-                        <DataGridTextColumn Header="图层名称" Binding="{Binding LayerName}" Width="160" IsReadOnly="True" Foreground="{StaticResource TextBrush}"/>
+                            <DataGridTextColumn Header="层级" Binding="{Binding Priority}" Width="45" IsReadOnly="True" Foreground="{StaticResource TextBrush}"/>
+                            <DataGridTextColumn Header="图层名称" Binding="{Binding LayerName}" Width="160" IsReadOnly="True" Foreground="{StaticResource TextBrush}"/>
 
-                        <DataGridTemplateColumn Header="Hatch 图案" Width="*">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding PatternName}" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Opacity="0.8"/>
-                                        <Button Grid.Column="1" Content="..." Style="{StaticResource ModernBtn}" 
-                                                Width="24" Height="18" Margin="4,0" Padding="0" Click="SelectMaterial_Click"/>
-                                    </Grid>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Hatch 图案" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding PatternName}" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Opacity="0.8"/>
+                                            <Button Grid.Column="1" Content="..." Style="{StaticResource ModernBtn}" 
+                                                    Width="24" Height="18" Margin="4,0" Padding="0" Click="SelectMaterial_Click"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTemplateColumn Header="当前填充色" Width="140">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <Grid Margin="0,2">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Border Width="12" Height="12" CornerRadius="2" Background="{Binding PreviewBrush}" BorderBrush="#444444" BorderThickness="1" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding LayerName}" FontSize="10" Foreground="#888888" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                        <Button Grid.Column="2" Content="改色" Style="{StaticResource ModernBtn}" Width="35" Height="18" FontSize="9" Padding="0" Click="SelectColor_Click"/>
-                                    </Grid>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="当前填充色" Width="140">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Width="12" Height="12" CornerRadius="2" Background="{Binding PreviewBrush}" BorderBrush="#444444" BorderThickness="1" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding LayerName}" FontSize="10" Foreground="#888888" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                            <Button Grid.Column="2" Content="改色" Style="{StaticResource ModernBtn}" Width="35" Height="18" FontSize="9" Padding="0" Click="SelectColor_Click"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="缩放" Binding="{Binding Scale}" Width="50" Foreground="{StaticResource TextBrush}"/>
+                            <DataGridTextColumn Header="缩放" Binding="{Binding Scale}" Width="50" Foreground="{StaticResource TextBrush}"/>
 
-                        <DataGridCheckBoxColumn Header="打印" 
-                        Binding="{Binding IsExportEnabled, UpdateSourceTrigger=PropertyChanged}" 
-                        Width="50">
-                            <DataGridCheckBoxColumn.ElementStyle>
-                                <Style TargetType="CheckBox">
-                                    <Setter Property="HorizontalAlignment" Value="Center"/>
-                                    <Setter Property="VerticalAlignment" Value="Center"/>
-                                </Style>
-                            </DataGridCheckBoxColumn.ElementStyle>
-                        </DataGridCheckBoxColumn>
+                            <DataGridCheckBoxColumn Header="填充预览" 
+                                                    Binding="{Binding IsFillLayer, UpdateSourceTrigger=PropertyChanged}" 
+                                                    Width="65">
+                                <DataGridCheckBoxColumn.ElementStyle>
+                                    <Style TargetType="CheckBox">
+                                        <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    </Style>
+                                </DataGridCheckBoxColumn.ElementStyle>
+                            </DataGridCheckBoxColumn>
 
-                        <DataGridCheckBoxColumn Header="填充预览" 
-                                                Binding="{Binding IsFillLayer, UpdateSourceTrigger=PropertyChanged}" 
-                                                Width="65">
-                            <DataGridCheckBoxColumn.ElementStyle>
-                                <Style TargetType="CheckBox">
-                                    <Setter Property="HorizontalAlignment" Value="Center"/>
-                                </Style>
-                            </DataGridCheckBoxColumn.ElementStyle>
-                        </DataGridCheckBoxColumn>
+                            <DataGridTemplateColumn Header="冻结" Width="45">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsFrozen, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTemplateColumn Header="冻结" Width="45">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <CheckBox IsChecked="{Binding IsFrozen, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center"/>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="操作" Width="70">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="刷新" Style="{StaticResource ModernBtn}" Height="20" Padding="4,0" FontSize="10" Click="RefreshLayer_Click"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
 
-                        <DataGridTemplateColumn Header="操作" Width="70">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <Button Content="刷新" Style="{StaticResource ModernBtn}" Height="20" Padding="4,0" FontSize="10" Click="RefreshLayer_Click"/>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-                    </DataGrid.Columns>
-                </DataGrid>
+                    <Canvas x:Name="DragCanvas" IsHitTestVisible="False">
+                        <Border x:Name="DragGhost" Background="{StaticResource SelectedBrush}" Opacity="0.6" CornerRadius="2" Visibility="Collapsed">
+                            <Rectangle x:Name="GhostVisual" Fill="White" Opacity="0.2"/>
+                        </Border>
+                        <Border x:Name="InsertionMarker" Height="2" Background="{StaticResource AccentBrush}" Visibility="Collapsed" Width="{Binding ActualWidth, ElementName=MainDataGrid}"/>
+                    </Canvas>
+                </Grid>
 
-                <Canvas x:Name="DragCanvas" IsHitTestVisible="False">
-                    <Border x:Name="DragGhost" Background="{StaticResource SelectedBrush}" Opacity="0.6" CornerRadius="2" Visibility="Collapsed">
-                        <Rectangle x:Name="GhostVisual" Fill="White" Opacity="0.2"/>
-                    </Border>
-                    <Border x:Name="InsertionMarker" Height="2" Background="{StaticResource AccentBrush}" Visibility="Collapsed" Width="{Binding ActualWidth, ElementName=MainDataGrid}"/>
-                </Canvas>
+                <Grid x:Name="AdvancedPanel" Visibility="Collapsed" Background="#1E1E1E">
+                    <wv2:WebView2 x:Name="WebViewStudio" Source="about:blank"/>
+                </Grid>
             </Grid>
 
-            <StatusBar Grid.Row="3" Background="#005A9E" Foreground="White" Padding="12,0">
+            <StatusBar Grid.Row="4" Background="#005A9E" Foreground="White" Padding="12,0">
                 <StatusBarItem>
-                    <TextBlock Text="准备就绪 | 填色将作为 PS 蒙版索引" FontSize="10" Opacity="0.9"/>
+                    <TextBlock Text="交流群 | 816139079" FontSize="10" Opacity="0.9"/>
                 </StatusBarItem>
             </StatusBar>
         </Grid>
